@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckSquare, Eye, EyeOff, Mail, Lock, User, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Eye, EyeOff, Loader2, AlertCircle, Check } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 type Mode = 'login' | 'register';
@@ -45,198 +45,180 @@ export default function AuthPage() {
   }
 
   return (
-    <div className="min-h-screen flex bg-[#FFFCF7]">
+    <div className="min-h-screen flex items-center justify-center bg-[#FAFAFC] px-6">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500&family=Inter:wght@400;500&display=swap');
         .font-display { font-family: 'Space Grotesk', sans-serif; }
-        @keyframes flowDot {
-          0% { left: 0%; opacity: 0; }
-          12% { opacity: 1; }
-          88% { opacity: 1; }
-          100% { left: 100%; opacity: 0; }
-        }
+        .font-body { font-family: 'Inter', sans-serif; }
+
         @keyframes fadeUp {
           from { opacity: 0; transform: translateY(8px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        .animate-fade-up { animation: fadeUp 0.5s ease-out both; }
-        .flow-dot { animation: flowDot 3.2s ease-in-out infinite; }
+        @keyframes traceCheck {
+          to { stroke-dashoffset: 0; }
+        }
+        .animate-fade-up { animation: fadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
+        .mark-path {
+          stroke-dasharray: 28;
+          stroke-dashoffset: 28;
+          animation: traceCheck 0.9s 0.3s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+        }
+
+        .field-input {
+          transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .field-input:focus {
+          box-shadow: 0 0 0 3px rgba(99, 102, 168, 0.10);
+        }
+
+        .tab-underline {
+          transition: transform 0.25s cubic-bezier(0.65, 0, 0.35, 1);
+        }
+
         @media (prefers-reduced-motion: reduce) {
-          .flow-dot, .animate-fade-up { animation: none; }
+          .animate-fade-up, .mark-path { animation: none; stroke-dashoffset: 0; opacity: 1; }
         }
       `}</style>
 
-      {/* Left brand panel */}
-      <div className="hidden lg:flex lg:w-[46%] bg-[#101935] relative flex-col justify-between p-12">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#F5A623] flex items-center justify-center">
-              <CheckSquare className="w-4 h-4 text-[#101935]" />
-            </div>
-            <span className="font-display text-xl text-white tracking-tight">Fast Space</span>
-          </div>
-          <p className="text-slate-400 text-sm mt-2 max-w-xs">Project &amp; task management, without the busywork.</p>
-        </div>
-
-        {/* Kanban illustration — signature element */}
-        <div className="space-y-3">
-          {['Plan sprints in minutes', 'Track progress in real time', 'Ship without the chaos'].map(t => (
-            <div key={t} className="flex items-center gap-2.5">
-              <CheckCircle2 className="w-4 h-4 text-[#2DD4BF] flex-shrink-0" />
-              <span className="text-sm text-slate-300">{t}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Right form panel */}
-      <div className="flex-1 flex items-center justify-center p-6 sm:p-10">
-        <div className="w-full max-w-md animate-fade-up">
-          {/* Mobile brand */}
-          <div className="lg:hidden text-center mb-8">
-            <div className="inline-flex items-center gap-2.5 mb-2">
-              <div className="w-8 h-8 rounded-lg bg-[#F5A623] flex items-center justify-center">
-                <CheckSquare className="w-4 h-4 text-[#101935]" />
-              </div>
-              <span className="font-display text-xl text-[#101935] tracking-tight">Fast Space</span>
-            </div>
-            <p className="text-slate-500 text-sm">Project &amp; Task Management</p>
-          </div>
-
-          <div className="hidden lg:block mb-8">
-            <h1 className="font-display text-2xl text-[#101935]">
-              {mode === 'login' ? 'Welcome back' : 'Create your account'}
-            </h1>
-            <p className="text-slate-500 text-sm mt-1">
-              {mode === 'login' ? 'Sign in to get back to your boards.' : 'Set up your workspace in under a minute.'}
-            </p>
-          </div>
-
-          <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/60 border border-slate-100 overflow-hidden">
-            <div className="px-6 pt-6">
-              <div className="relative flex bg-slate-100 rounded-full p-1">
-                <div
-                  className={`absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-full bg-[#101935] transition-transform duration-300 ease-out ${
-                    mode === 'register' ? 'translate-x-full' : 'translate-x-0'
-                  }`}
-                />
-                <button
-                  type="button"
-                  onClick={() => switchMode('login')}
-                  aria-pressed={mode === 'login'}
-                  className={`relative z-10 flex-1 py-2.5 text-sm font-semibold rounded-full transition-colors ${
-                    mode === 'login' ? 'text-white' : 'text-slate-500 hover:text-slate-700'
-                  }`}
-                >
-                  Sign In
-                </button>
-                <button
-                  type="button"
-                  onClick={() => switchMode('register')}
-                  aria-pressed={mode === 'register'}
-                  className={`relative z-10 flex-1 py-2.5 text-sm font-semibold rounded-full transition-colors ${
-                    mode === 'register' ? 'text-white' : 'text-slate-500 hover:text-slate-700'
-                  }`}
-                >
-                  Create Account
-                </button>
-              </div>
-            </div>
-
-            <form onSubmit={handleSubmit} className="p-6 sm:p-7 space-y-4">
-              {mode === 'register' && (
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Full name</label>
-                  <div className="relative">
-                    <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input
-                      type="text"
-                      value={fullName}
-                      onChange={e => setFullName(e.target.value)}
-                      placeholder="John Doe"
-                      autoComplete="name"
-                      className="w-full pl-10 pr-4 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#101935]/15 focus:border-[#101935]/40 transition-shadow"
-                      required
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Email</label>
-                <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    placeholder="you@example.com"
-                    autoComplete="email"
-                    className="w-full pl-10 pr-4 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#101935]/15 focus:border-[#101935]/40 transition-shadow"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <input
-                    type={showPass ? 'text' : 'password'}
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                    className="w-full pl-10 pr-10 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#101935]/15 focus:border-[#101935]/40 transition-shadow"
-                    required
-                    minLength={6}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPass(!showPass)}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                    aria-label={showPass ? 'Hide password' : 'Show password'}
-                  >
-                    {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-                {mode === 'register' && (
-                  <div className={`flex items-center gap-1.5 mt-2 text-xs transition-colors ${passwordValid ? 'text-[#0F9B8E]' : 'text-slate-400'}`}>
-                    <CheckCircle2 className={`w-3.5 h-3.5 ${passwordValid ? 'opacity-100' : 'opacity-40'}`} />
-                    <span>At least 6 characters</span>
-                  </div>
-                )}
-              </div>
-
-              {error && (
-                <div className="flex items-start gap-2 px-4 py-3 bg-red-50 border border-red-100 rounded-lg text-sm text-red-600">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>{error}</span>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 bg-[#F5A623] hover:bg-[#e6981a] disabled:opacity-60 disabled:cursor-not-allowed text-[#101935] font-semibold rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    {mode === 'login' ? 'Signing in…' : 'Creating account…'}
-                  </>
-                ) : (
-                  mode === 'login' ? 'Sign In' : 'Create Account'
-                )}
-              </button>
-            </form>
-          </div>
-
-          <p className="text-center text-slate-400 text-xs mt-6">
-            Fast Space — Streamline your team&apos;s workflow
+      <div className="w-full max-w-[380px] font-body">
+        {/* Mark + heading */}
+        <div className="flex flex-col items-center text-center mb-10 animate-fade-up">
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none" className="mb-5">
+            <circle cx="18" cy="18" r="17" stroke="#C7C9DA" strokeWidth="1" />
+            <path
+              className="mark-path"
+              d="M11 18.5L15.5 23L25 12.5"
+              stroke="#6366A8"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              fill="none"
+            />
+          </svg>
+          <h1 className="font-display text-[20px] font-normal text-[#1C1E26] tracking-tight">
+            {mode === 'login' ? 'Welcome back' : 'Create your account'}
+          </h1>
+          <p className="text-[#8B8DA0] text-[13.5px] mt-2 leading-relaxed">
+            {mode === 'login' ? 'Sign in to continue to Fast Space.' : 'Set up your workspace in under a minute.'}
           </p>
         </div>
+
+        {/* Quiet tab switcher */}
+        <div className="flex gap-6 mb-8 border-b border-[#ECECF1] animate-fade-up" style={{ animationDelay: '60ms' }}>
+          {(['login', 'register'] as Mode[]).map(m => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => switchMode(m)}
+              aria-pressed={mode === m}
+              className={`relative pb-3 text-[13.5px] font-medium transition-colors ${
+                mode === m ? 'text-[#1C1E26]' : 'text-[#A6A8B8] hover:text-[#6B6D80]'
+              }`}
+            >
+              {m === 'login' ? 'Sign in' : 'Create account'}
+              <span
+                className="tab-underline absolute left-0 right-0 -bottom-px h-[1.5px] bg-[#1C1E26] origin-left"
+                style={{ transform: mode === m ? 'scaleX(1)' : 'scaleX(0)' }}
+              />
+            </button>
+          ))}
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-5 animate-fade-up" style={{ animationDelay: '120ms' }} noValidate>
+          {mode === 'register' && (
+            <div>
+              <label htmlFor="fullName" className="block text-[13px] text-[#6B6D80] mb-2">
+                Full name
+              </label>
+              <input
+                id="fullName"
+                type="text"
+                value={fullName}
+                onChange={e => setFullName(e.target.value)}
+                placeholder="Jordan Lee"
+                autoComplete="name"
+                className="field-input w-full px-0 py-2.5 bg-transparent border-0 border-b border-[#E2E2EA] text-[14px] text-[#1C1E26] placeholder:text-[#C4C5D2] focus:outline-none focus:border-[#6366A8]"
+                required
+              />
+            </div>
+          )}
+
+          <div>
+            <label htmlFor="email" className="block text-[13px] text-[#6B6D80] mb-2">
+              Email
+            </label>
+            <input
+              id="email"
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              autoComplete="email"
+              className="field-input w-full px-0 py-2.5 bg-transparent border-0 border-b border-[#E2E2EA] text-[14px] text-[#1C1E26] placeholder:text-[#C4C5D2] focus:outline-none focus:border-[#6366A8]"
+              required
+            />
+          </div>
+
+          <div>
+            <label htmlFor="password" className="block text-[13px] text-[#6B6D80] mb-2">
+              Password
+            </label>
+            <div className="relative">
+              <input
+                id="password"
+                type={showPass ? 'text' : 'password'}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••"
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                className="field-input w-full px-0 py-2.5 pr-8 bg-transparent border-0 border-b border-[#E2E2EA] text-[14px] text-[#1C1E26] placeholder:text-[#C4C5D2] focus:outline-none focus:border-[#6366A8]"
+                required
+                minLength={6}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPass(!showPass)}
+                className="absolute right-0 top-1/2 -translate-y-1/2 text-[#B5B6C4] hover:text-[#6B6D80] transition-colors"
+                aria-label={showPass ? 'Hide password' : 'Show password'}
+              >
+                {showPass ? <EyeOff className="w-[15px] h-[15px]" /> : <Eye className="w-[15px] h-[15px]" />}
+              </button>
+            </div>
+            {mode === 'register' && (
+              <div className={`flex items-center gap-1.5 mt-2.5 text-[12px] transition-colors duration-200 ${passwordValid ? 'text-[#6366A8]' : 'text-[#C4C5D2]'}`}>
+                <Check className="w-3 h-3" strokeWidth={2.5} />
+                <span>At least 6 characters</span>
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div role="alert" className="flex items-start gap-2 text-[13px] text-[#B14B4B] animate-fade-up">
+              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 mt-2 bg-[#1C1E26] hover:bg-[#33354A] disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-md text-[13.5px] transition-colors flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#6366A8] focus-visible:ring-offset-2 focus-visible:ring-offset-[#FAFAFC]"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                {mode === 'login' ? 'Signing in' : 'Creating account'}
+              </>
+            ) : (
+              mode === 'login' ? 'Sign in' : 'Create account'
+            )}
+          </button>
+        </form>
+
+        <p className="text-center text-[#C4C5D2] text-[11.5px] mt-10 animate-fade-up" style={{ animationDelay: '180ms' }}>
+          Fast Space
+        </p>
       </div>
     </div>
   );

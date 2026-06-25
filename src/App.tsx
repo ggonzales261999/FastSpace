@@ -1,30 +1,77 @@
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { FontSizeProvider } from './context/FontSizeContext';
 import AuthPage from './pages/AuthPage';
 import Sidebar from './components/layout/Sidebar';
 import Dashboard from './pages/Dashboard';
 import ProjectsPage from './pages/ProjectsPage';
 import TasksPage from './pages/TasksPage';
 import SettingsPage from './pages/SettingsPage';
+import DepartmentsPage from './pages/DepartmentsPage';
+import UserManagementPage from './pages/UserManagementPage';
 import ProjectModal from './components/modals/ProjectModal';
 import { supabase } from './lib/supabase';
-import { Project } from './types';
+import { Department, Profile, Project } from './types';
+import { queryKeys } from './lib/queryClient';
+import { filterVisibleProjects } from './lib/projectAccess';
 
 function AppShell() {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const [activePage, setActivePage] = useState('dashboard');
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
-  const [projects, setProjects] = useState<Project[]>([]);
   const [showProjectModal, setShowProjectModal] = useState(false);
 
-  async function loadProjects() {
-    const { data } = await supabase.from('projects').select('*').order('created_at');
-    setProjects(data ?? []);
-  }
+  const projectsQuery = useQuery({
+    queryKey: [...queryKeys.projects, user?.id ?? 'anon', profile?.department_id ?? 'none', profile?.role ?? 'unknown'],
+    enabled: !!user,
+    queryFn: async () => {
+      const [{ data: projects }, { data: currentProfile }, { data: memberProjects }] = await Promise.all([
+        supabase
+          .from('projects')
+          .select('*')
+          .eq('is_deleted', false)
+          .eq('status', true)
+          .order('created_at'),
+        supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user!.id)
+          .maybeSingle(),
+        supabase
+          .from('project_members')
+          .select('project_id')
+          .eq('user_id', user!.id),
+      ]);
 
-  useEffect(() => {
-    if (user) loadProjects();
-  }, [user]);
+      const visibleByDept = filterVisibleProjects(currentProfile as Profile | null, (projects ?? []) as Project[]);
+      const memberProjectIds = new Set((memberProjects ?? []).map(m => m.project_id));
+
+      // Combine: projects visible by department + projects user is a member of
+      const allVisibleProjects = [...visibleByDept];
+      for (const project of (projects ?? []) as Project[]) {
+        if (memberProjectIds.has(project.id) && !allVisibleProjects.some(p => p.id === project.id)) {
+          allVisibleProjects.push(project);
+        }
+      }
+
+      return allVisibleProjects;
+    },
+  });
+
+  const departmentsQuery = useQuery({
+    queryKey: queryKeys.departments,
+    enabled: !!user,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('departments')
+        .select('*')
+        .eq('is_deleted', false)
+        .eq('status', true)
+        .order('name');
+      return (data ?? []) as Department[];
+    },
+  });
 
   function navigate(page: string, projectId?: string) {
     setActivePage(page);
@@ -35,7 +82,22 @@ function AppShell() {
     }
   }
 
-  if (loading) {
+  useEffect(() => {
+    if (activeProjectId && !(projectsQuery.data ?? []).some(project => project.id === activeProjectId)) {
+      setActiveProjectId(undefined);
+    }
+  }, [activeProjectId, projectsQuery.data]);
+
+  useEffect(() => {
+    if (activePage === 'user-management' && profile?.role !== 'admin') {
+      setActivePage('dashboard');
+    }
+    if (activePage === 'departments' && profile?.role === 'user') {
+      setActivePage('dashboard');
+    }
+  }, [activePage, profile?.role]);
+
+  if (loading || (user && (projectsQuery.isLoading || departmentsQuery.isLoading))) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
         <div className="flex gap-1.5">
@@ -58,10 +120,11 @@ function AppShell() {
       <Sidebar
         activePage={activePage}
         onNavigate={navigate}
-        projects={projects}
+        projects={projectsQuery.data ?? []}
+        departments={departmentsQuery.data ?? []}
         activeProjectId={activeProjectId}
         onAddProject={() => setShowProjectModal(true)}
-        onRefreshProjects={loadProjects}
+        onRefreshProjects={() => projectsQuery.refetch()}
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -69,23 +132,25 @@ function AppShell() {
         {activePage === 'projects' && (
           <ProjectsPage
             onNavigate={navigate}
-            onRefreshProjects={loadProjects}
+            onRefreshProjects={() => projectsQuery.refetch()}
           />
         )}
         {activePage === 'tasks' && (
           <TasksPage
-            projects={projects}
+            projects={projectsQuery.data ?? []}
             filterProjectId={activeProjectId}
             onProjectIdChange={id => setActiveProjectId(id)}
           />
         )}
+        {activePage === 'departments' && <DepartmentsPage />}
+        {activePage === 'user-management' && <UserManagementPage />}
         {activePage === 'settings' && <SettingsPage />}
       </div>
 
       {showProjectModal && (
         <ProjectModal
           onClose={() => setShowProjectModal(false)}
-          onCreated={loadProjects}
+          onCreated={() => projectsQuery.refetch()}
         />
       )}
     </div>
@@ -95,7 +160,9 @@ function AppShell() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppShell />
+      <FontSizeProvider>
+        <AppShell />
+      </FontSizeProvider>
     </AuthProvider>
   );
 }

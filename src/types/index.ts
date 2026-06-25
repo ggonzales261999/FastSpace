@@ -2,13 +2,29 @@ export type UserRole = 'admin' | 'manager' | 'user';
 export type TaskStatus = 'todo' | 'doing' | 'done' | 'hold';
 export type ProjectMemberRole = 'owner' | 'member';
 
+export interface Department {
+  id: string;
+  name: string;
+  description?: string | null;
+  color: string;
+  is_deleted: boolean;
+  status: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Profile {
   id: string;
   full_name: string;
   role: UserRole;
   avatar_url?: string | null;
+  department_id?: string | null;
+  font_size: number;
+  is_deleted: boolean;
+  status: boolean;
   created_at: string;
   updated_at: string;
+  department?: Department | null;
 }
 
 export interface Project {
@@ -16,11 +32,15 @@ export interface Project {
   name: string;
   color: string;
   description?: string | null;
+  department_id?: string | null;
   created_by: string;
+  is_deleted: boolean;
+  status: boolean;
   created_at: string;
   updated_at: string;
   main_task_count?: number;
   sub_task_count?: number;
+  department?: Department | null;
 }
 
 export interface ProjectMember {
@@ -57,6 +77,8 @@ export interface Task {
   assigned_to?: string | null;
   created_by: string;
   position: number;
+  is_deleted: boolean;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
   subtasks?: Task[];
@@ -69,6 +91,8 @@ export interface TaskMessage {
   task_id: string;
   user_id: string;
   body: string;
+  is_deleted: boolean;
+  status: boolean;
   created_at: string;
   updated_at: string;
   author?: Profile | null;

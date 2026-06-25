@@ -1,12 +1,16 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { X, Clock } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { Project, Profile, TaskStatus } from '../../types';
+import { queryKeys } from '../../lib/queryClient';
 
 interface Props {
   projects: Project[];
   defaultProjectId?: string;
+  assigneeOptionsByProjectId: Record<string, Profile[]>;
+  canManageAssigneeForProject: (projectId: string) => boolean;
   onClose: () => void;
   onCreated: () => void;
 }
@@ -23,11 +27,19 @@ function calculateHours(start: string, end: string): number | null {
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) return null;
   const diffMs = endDate.getTime() - startDate.getTime();
   if (diffMs <= 0) return null;
-  return Math.round((diffMs / 3600000) * 10) / 10; // Round to 1 decimal
+  return Math.round((diffMs / 3600000) * 10) / 10;
 }
 
-export default function AddTaskModal({ projects, defaultProjectId, onClose, onCreated }: Props) {
+export default function AddTaskModal({
+  projects,
+  defaultProjectId,
+  assigneeOptionsByProjectId,
+  canManageAssigneeForProject,
+  onClose,
+  onCreated,
+}: Props) {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [projectId, setProjectId] = useState(defaultProjectId ?? (projects[0]?.id ?? ''));
@@ -40,11 +52,8 @@ export default function AddTaskModal({ projects, defaultProjectId, onClose, onCr
   const [autoCalculatePlanned, setAutoCalculatePlanned] = useState(true);
   const [autoCalculateActual, setAutoCalculateActual] = useState(true);
   const [assignedTo, setAssignedTo] = useState('');
-  const [members, setMembers] = useState<Profile[]>([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Auto-calculated hours
   const plannedHours = useMemo(() => {
     if (!autoCalculatePlanned) return null;
     return calculateHours(plannedStart, plannedEnd);
@@ -60,33 +69,37 @@ export default function AddTaskModal({ projects, defaultProjectId, onClose, onCr
     return est ?? plannedHours ?? actualHours;
   }, [estimatedHours, plannedHours, actualHours]);
 
-  useEffect(() => {
-    supabase.from('profiles').select('*').then(({ data }) => setMembers(data ?? []));
-  }, []);
+  const createTaskMutation = useMutation({
+    mutationFn: async () => {
+      if (!title.trim() || !projectId) throw new Error('Title and project are required');
+      const { error } = await supabase.from('tasks').insert({
+        project_id: projectId,
+        title: title.trim(),
+        description: description.trim() || null,
+        status,
+        planned_start: toISO(plannedStart),
+        planned_end: toISO(plannedEnd),
+        actual_start: toISO(actualStart),
+        actual_end: toISO(actualEnd),
+        estimated_hours: displayHours,
+        assigned_to: assignedTo || null,
+        created_by: user!.id,
+      });
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.tasks }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
+      ]);
+      onCreated();
+      onClose();
+    },
+    onError: (err: Error) => setError(err.message),
+  });
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!title.trim() || !projectId) return;
-    setLoading(true);
-    setError('');
-    const { error } = await supabase.from('tasks').insert({
-      project_id: projectId,
-      title: title.trim(),
-      description: description.trim() || null,
-      status,
-      planned_start: toISO(plannedStart),
-      planned_end: toISO(plannedEnd),
-      actual_start: toISO(actualStart),
-      actual_end: toISO(actualEnd),
-      estimated_hours: displayHours,
-      assigned_to: assignedTo || null,
-      created_by: user!.id,
-    });
-    setLoading(false);
-    if (error) { setError(error.message); return; }
-    onCreated();
-    onClose();
-  }
+  const members = assigneeOptionsByProjectId[projectId] ?? [];
+  const canAssign = canManageAssigneeForProject(projectId);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -95,7 +108,14 @@ export default function AddTaskModal({ projects, defaultProjectId, onClose, onCr
           <h2 className="font-semibold text-gray-900">Add New Task</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
+        <form
+          onSubmit={e => {
+            e.preventDefault();
+            setError('');
+            createTaskMutation.mutate();
+          }}
+          className="p-6 space-y-4 overflow-y-auto flex-1"
+        >
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Title *</label>
             <input
@@ -144,7 +164,6 @@ export default function AddTaskModal({ projects, defaultProjectId, onClose, onCr
             </div>
           </div>
 
-          {/* Planned dates with auto-hours */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium text-gray-700">Planned Schedule</label>
@@ -161,32 +180,22 @@ export default function AddTaskModal({ projects, defaultProjectId, onClose, onCr
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Start Date & Time</label>
-                <input
-                  type="datetime-local"
-                  value={plannedStart}
-                  onChange={e => setPlannedStart(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <input type="datetime-local" value={plannedStart} onChange={e => setPlannedStart(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">End Date & Time</label>
-                <input
-                  type="datetime-local"
-                  value={plannedEnd}
-                  onChange={e => setPlannedEnd(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <input type="datetime-local" value={plannedEnd} onChange={e => setPlannedEnd(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
             </div>
             {plannedHours !== null && (
               <div className="flex items-center gap-1.5 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">
-                <Clock className="w-3 h-3" />
-                Auto-calculated: {plannedHours} hours
+                <Clock className="w-3 h-3" />Auto-calculated: {plannedHours} hours
               </div>
             )}
           </div>
 
-          {/* Actual dates with auto-hours */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium text-gray-700">Actual Schedule</label>
@@ -203,27 +212,18 @@ export default function AddTaskModal({ projects, defaultProjectId, onClose, onCr
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Start Date & Time</label>
-                <input
-                  type="datetime-local"
-                  value={actualStart}
-                  onChange={e => setActualStart(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <input type="datetime-local" value={actualStart} onChange={e => setActualStart(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">End Date & Time</label>
-                <input
-                  type="datetime-local"
-                  value={actualEnd}
-                  onChange={e => setActualEnd(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <input type="datetime-local" value={actualEnd} onChange={e => setActualEnd(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
             </div>
             {actualHours !== null && (
               <div className="flex items-center gap-1.5 text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded">
-                <Clock className="w-3 h-3" />
-                Auto-calculated: {actualHours} hours
+                <Clock className="w-3 h-3" />Auto-calculated: {actualHours} hours
               </div>
             )}
           </div>
@@ -233,40 +233,33 @@ export default function AddTaskModal({ projects, defaultProjectId, onClose, onCr
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
                 Est. Hours {displayHours !== null && <span className="text-blue-600 text-xs">({displayHours}h)</span>}
               </label>
-              <input
-                type="number"
-                value={estimatedHours}
-                onChange={e => setEstimatedHours(e.target.value)}
-                min="0"
-                step="0.5"
-                placeholder={displayHours !== null ? `${displayHours}` : '0'}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <input type="number" value={estimatedHours} onChange={e => setEstimatedHours(e.target.value)}
+                min="0" step="0.5" placeholder={displayHours !== null ? `${displayHours}` : '0'}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               <p className="text-xs text-gray-400 mt-1">Leave empty to use auto-calculated</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Assign To</label>
-              <select
-                value={assignedTo}
-                onChange={e => setAssignedTo(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">Unassigned</option>
-                {members.map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}
-              </select>
+              {canAssign ? (
+                <select value={assignedTo} onChange={e => setAssignedTo(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">Unassigned</option>
+                  {members.map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}
+                </select>
+              ) : (
+                <p className="text-xs text-gray-400 px-3 py-2 bg-gray-50 rounded-lg border border-gray-200">
+                  Only project members can assign tasks.
+                </p>
+              )}
             </div>
           </div>
+
           {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
           <div className="flex gap-3 pt-2">
-            <button type="button" onClick={onClose} className="flex-1 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading || !title.trim()}
-              className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg text-sm font-semibold transition-colors"
-            >
-              {loading ? 'Creating...' : 'Add Task'}
+            <button type="button" onClick={onClose} className="flex-1 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Cancel</button>
+            <button type="submit" disabled={createTaskMutation.isPending || !title.trim()}
+              className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg text-sm font-semibold transition-colors">
+              {createTaskMutation.isPending ? 'Creating...' : 'Add Task'}
             </button>
           </div>
         </form>

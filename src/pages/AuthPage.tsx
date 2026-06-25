@@ -30,7 +30,7 @@ export default function AuthPage() {
         if (error.message.includes('already registered') || error.message.includes('already been registered')) {
           setError('This email is already registered. Please sign in instead.');
         } else if (error.message.includes('unexpected_failure') || error.message.includes('Database error')) {
-          setError('Sign up failed. Please try again or use a different email.');
+          setError('Sign up failed because the database profile trigger is not ready. Apply the latest Supabase migrations, then try again.');
         } else {
           setError(error.message);
         }

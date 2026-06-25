@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   LayoutDashboard, FolderOpen, CheckSquare, Settings,
-  ChevronDown, Plus, LogOut, Users, Trash2, MoreHorizontal, Zap,
+  ChevronDown, Plus, LogOut, Users, Trash2, MoreHorizontal, Building2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { Project } from '../../types';
+import { Department, Project } from '../../types';
 import { supabase } from '../../lib/supabase';
 import ProjectMembersModal from '../modals/ProjectMembersModal';
 
@@ -12,6 +12,7 @@ interface SidebarProps {
   activePage: string;
   onNavigate: (page: string, projectId?: string) => void;
   projects: Project[];
+  departments: Department[];
   activeProjectId?: string;
   onAddProject: () => void;
   onRefreshProjects: () => void;
@@ -20,10 +21,11 @@ interface SidebarProps {
 interface MenuPos { x: number; y: number; projectId: string }
 
 export default function Sidebar({
-  activePage, onNavigate, projects, activeProjectId, onAddProject, onRefreshProjects,
+  activePage, onNavigate, projects, departments, activeProjectId, onAddProject, onRefreshProjects,
 }: SidebarProps) {
   const { profile, user, signOut } = useAuth();
   const [projectsOpen, setProjectsOpen] = useState(true);
+  const [collapsedDepts, setCollapsedDepts] = useState<Record<string, boolean>>({});
   const [menuPos, setMenuPos] = useState<MenuPos | null>(null);
   const [managingProject, setManagingProject] = useState<Project | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -50,7 +52,11 @@ export default function Sidebar({
   async function deleteProject(id: string) {
     if (!confirm('Delete this project and all its tasks?')) return;
     setMenuPos(null);
-    await supabase.from('projects').delete().eq('id', id);
+    // Soft delete: mark project and its tasks as deleted
+    await supabase
+      .from('projects')
+      .update({ is_deleted: true, status: false, updated_at: new Date().toISOString() })
+      .eq('id', id);
     onRefreshProjects();
   }
 
@@ -69,12 +75,23 @@ export default function Sidebar({
     : 'U';
 
   const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'projects', label: 'Projects', icon: FolderOpen },
-    { id: 'tasks', label: 'All Tasks', icon: CheckSquare },
+    { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
+    { id: 'projects',    label: 'Projects',    icon: FolderOpen },
+    { id: 'tasks',       label: 'All Tasks',   icon: CheckSquare },
+    ...((profile?.role === 'admin' || profile?.role === 'manager')
+      ? [{ id: 'departments', label: 'Departments', icon: Building2 }]
+      : []),
+    ...(profile?.role === 'admin' ? [{ id: 'user-management', label: 'User Management', icon: Users }] : []),
   ];
 
   const activeMenuProject = menuPos ? projects.find(p => p.id === menuPos.projectId) : null;
+  const projectGroups = departments
+    .map(department => ({
+      department,
+      projects: projects.filter(project => project.department_id === department.id),
+    }))
+    .filter(group => group.projects.length > 0);
+  const unassignedProjects = projects.filter(project => !project.department_id);
 
   return (
     <>
@@ -137,36 +154,106 @@ export default function Sidebar({
           </div>
 
           {projectsOpen && (
-            <div className="space-y-0.5">
-              {projects.map(p => {
-                const isActive = activeProjectId === p.id && activePage === 'tasks';
+            <div className="space-y-3">
+              {projectGroups.map(({ department, projects: deptProjects }) => {
+                const isDeptCollapsed = collapsedDepts[department.id] ?? false;
                 return (
-                  <div key={p.id} className="relative group">
+                  <div key={department.id} className="space-y-1">
                     <button
-                      onClick={() => onNavigate('tasks', p.id)}
-                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-[13px] transition-all ${
-                        isActive
-                          ? 'bg-white/10 text-white'
-                          : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
-                      }`}
+                      onClick={() => setCollapsedDepts(prev => ({ ...prev, [department.id]: !prev[department.id] }))}
+                      className="w-full flex items-center gap-1.5 px-2.5 pt-1 text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-400 transition-colors"
                     >
-                      <span
-                        className="w-2 h-2 rounded-full flex-shrink-0 shadow-sm"
-                        style={{ backgroundColor: p.color }}
-                      />
-                      <span className="flex-1 text-left truncate">{p.name}</span>
-                      {canManageProject(p) && (
-                        <button
-                          onClick={e => openMenu(e, p.id)}
-                          className="opacity-0 group-hover:opacity-100 p-0.5 rounded-md hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-all"
-                        >
-                          <MoreHorizontal className="w-3.5 h-3.5" />
-                        </button>
-                      )}
+                      <ChevronDown className={`w-3 h-3 flex-shrink-0 transition-transform duration-200 ${isDeptCollapsed ? '-rotate-90' : ''}`} />
+                      <span className="flex-1 text-left truncate">{department.name}</span>
+                      <span className="text-[9px] font-normal normal-case tracking-normal text-slate-600 flex-shrink-0">
+                        {deptProjects.length}
+                      </span>
                     </button>
+                    {!isDeptCollapsed && (
+                      <div className="space-y-0.5">
+                        {deptProjects.map(p => {
+                          const isActive = activeProjectId === p.id && activePage === 'tasks';
+                          return (
+                            <div key={p.id} className="relative group">
+                              <button
+                                onClick={() => onNavigate('tasks', p.id)}
+                                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-[13px] transition-all ${
+                                  isActive
+                                    ? 'bg-white/10 text-white'
+                                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                                }`}
+                              >
+                                <span
+                                  className="w-2 h-2 rounded-full flex-shrink-0 shadow-sm"
+                                  style={{ backgroundColor: p.color }}
+                                />
+                                <span className="flex-1 text-left truncate">{p.name}</span>
+                                {canManageProject(p) && (
+                                  <button
+                                    onClick={e => openMenu(e, p.id)}
+                                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded-md hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-all"
+                                  >
+                                    <MoreHorizontal className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 );
               })}
+
+              {unassignedProjects.length > 0 && (
+                <div className="space-y-1">
+                  <button
+                    onClick={() => setCollapsedDepts(prev => ({ ...prev, __unassigned__: !prev.__unassigned__ }))}
+                    className="w-full flex items-center gap-1.5 px-2.5 pt-1 text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-400 transition-colors"
+                  >
+                    <ChevronDown className={`w-3 h-3 flex-shrink-0 transition-transform duration-200 ${collapsedDepts.__unassigned__ ? '-rotate-90' : ''}`} />
+                    <span className="flex-1 text-left">Unassigned</span>
+                    <span className="text-[9px] font-normal normal-case tracking-normal text-slate-600 flex-shrink-0">
+                      {unassignedProjects.length}
+                    </span>
+                  </button>
+                  {!collapsedDepts.__unassigned__ && (
+                    <div className="space-y-0.5">
+                      {unassignedProjects.map(p => {
+                        const isActive = activeProjectId === p.id && activePage === 'tasks';
+                        return (
+                          <div key={p.id} className="relative group">
+                            <button
+                              onClick={() => onNavigate('tasks', p.id)}
+                              className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-[13px] transition-all ${
+                                isActive
+                                  ? 'bg-white/10 text-white'
+                                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                              }`}
+                            >
+                              <span
+                                className="w-2 h-2 rounded-full flex-shrink-0 shadow-sm"
+                                style={{ backgroundColor: p.color }}
+                              />
+                              <span className="flex-1 text-left truncate">{p.name}</span>
+                              {canManageProject(p) && (
+                                <button
+                                  onClick={e => openMenu(e, p.id)}
+                                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded-md hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-all"
+                                >
+                                  <MoreHorizontal className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {projects.length === 0 && (
                 <p className="px-2.5 py-2 text-xs text-slate-600">No projects yet</p>
               )}
@@ -186,7 +273,7 @@ export default function Sidebar({
             }`}
           >
             <Settings className="w-4 h-4" />
-            Settings
+            User Profile
           </button>
 
           <div className="flex items-center gap-3 px-3 py-2.5">

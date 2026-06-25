@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LayoutGrid, List, BarChart2, Plus, Search, Upload, Download } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { Task, Project, ViewMode } from '../types';
+import { Task, Project, ViewMode, Profile } from '../types';
 import ListView from '../components/tasks/ListView';
 import BoardView from '../components/tasks/BoardView';
 import GanttView from '../components/tasks/GanttView';
-import TaskDetailPanel from '../components/tasks/TaskDetailPanel';
+import TaskDetailModal from '../components/tasks/TaskDetailModal';
 import AddTaskModal from '../components/tasks/AddTaskModal';
 import TaskImportModal from '../components/tasks/TaskImportModal';
 import { useAuth } from '../context/AuthContext';
+import { queryKeys } from '../lib/queryClient';
 
 interface Props {
   projects: Project[];
@@ -18,54 +20,110 @@ interface Props {
 
 export default function TasksPage({ projects, filterProjectId, onProjectIdChange }: Props) {
   const { profile, user } = useAuth();
+  const queryClient = useQueryClient();
   const [view, setView] = useState<ViewMode>('list');
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [search, setSearch] = useState('');
-  const [projectMemberIds, setProjectMemberIds] = useState<Set<string>>(new Set());
 
   const canCreate = profile?.role === 'admin' || profile?.role === 'manager';
+  const visibleProjectIds = useMemo(() => projects.map(project => project.id), [projects]);
 
-  async function loadTasks() {
-    const { data } = await supabase
-      .from('tasks')
-      .select('*')
-      .order('position')
-      .order('created_at');
-    setTasks(data ?? []);
-    setLoading(false);
-  }
-
-  useEffect(() => {
-    async function loadMembers() {
-      if (!filterProjectId || !user) return;
+  const tasksQuery = useQuery({
+    queryKey: queryKeys.tasks,
+    queryFn: async () => {
       const { data } = await supabase
-        .from('project_members')
-        .select('user_id')
-        .eq('project_id', filterProjectId);
-      const memberIds = new Set((data || []).map(m => m.user_id));
-      const project = projects.find(p => p.id === filterProjectId);
-      if (project?.created_by) memberIds.add(project.created_by);
-      setProjectMemberIds(memberIds);
-    }
-    loadMembers();
-  }, [filterProjectId, user, projects]);
+        .from('tasks')
+        .select('*')
+        .eq('is_deleted', false)
+        .eq('is_active', true)
+        .order('position')
+        .order('created_at');
+      return (data ?? []) as Task[];
+    },
+  });
 
-  useEffect(() => { loadTasks(); }, []);
+  const projectAccessQuery = useQuery({
+    queryKey: [...queryKeys.projectMembers(filterProjectId ?? 'all-visible'), user?.id ?? 'anon', visibleProjectIds.join(',')],
+    enabled: !!user && visibleProjectIds.length > 0,
+    queryFn: async () => {
+      const creatorIds = [...new Set(projects.map(p => p.created_by))];
 
-  const filteredTasks = tasks.filter(t => {
+      const [{ data: memberData }, { data: creatorProfiles }] = await Promise.all([
+        supabase
+          .from('project_members')
+          .select('project_id,user_id, profile:profiles(id,full_name,department_id,role)')
+          .in('project_id', visibleProjectIds),
+        creatorIds.length > 0
+          ? supabase.from('profiles').select('id,full_name,department_id,role').in('id', creatorIds)
+          : Promise.resolve({ data: [] }),
+      ]);
+
+      const memberRows = (memberData ?? []) as unknown as Array<{
+        project_id: string;
+        user_id: string;
+        profile?: Profile | null;
+      }>;
+
+      const creatorProfileMap: Record<string, Profile> = {};
+      (creatorProfiles ?? []).forEach(p => { creatorProfileMap[p.id] = p as Profile; });
+
+      const memberProjectIds = new Set<string>();
+      const assigneeOptionsByProjectId: Record<string, Profile[]> = {};
+
+      for (const project of projects) {
+        const options: Profile[] = [];
+        const seen = new Set<string>();
+
+        // Project creator always has edit access and is always an assignee option
+        if (project.created_by === user?.id) {
+          memberProjectIds.add(project.id);
+        }
+        const creatorProfile = creatorProfileMap[project.created_by];
+        if (creatorProfile && !seen.has(creatorProfile.id)) {
+          options.push(creatorProfile);
+          seen.add(creatorProfile.id);
+        }
+
+        const projectMemberRows = memberRows.filter(row => row.project_id === project.id);
+        if (projectMemberRows.some(row => row.user_id === user?.id)) {
+          memberProjectIds.add(project.id);
+        }
+
+        for (const row of projectMemberRows) {
+          const profileItem = row.profile ?? undefined;
+          if (profileItem && !seen.has(profileItem.id)) {
+            options.push(profileItem);
+            seen.add(profileItem.id);
+          }
+        }
+
+        assigneeOptionsByProjectId[project.id] = options;
+      }
+
+      return { memberProjectIds, assigneeOptionsByProjectId };
+    },
+  });
+
+  const canManageAssigneeForProject = (projectId: string) => (
+    canCreate || projectAccessQuery.data?.memberProjectIds.has(projectId) || false
+  );
+  const canEditTaskForProject = (projectId: string) => (
+    canCreate || projectAccessQuery.data?.memberProjectIds.has(projectId) || false
+  );
+
+  const filteredTasks = useMemo(() => (tasksQuery.data ?? []).filter(t => {
+    const matchesVisibleProjects = projects.some(project => project.id === t.project_id);
     const matchesProject = filterProjectId ? t.project_id === filterProjectId : true;
     const matchesSearch = search.trim()
       ? t.title.toLowerCase().includes(search.toLowerCase())
       : true;
-    return matchesProject && matchesSearch;
-  });
+    return matchesVisibleProjects && matchesProject && matchesSearch;
+  }), [tasksQuery.data, filterProjectId, search, projects]);
 
   function handleTaskUpdate() {
-    loadTasks();
+    queryClient.invalidateQueries({ queryKey: queryKeys.tasks });
     if (selectedTask) {
       supabase.from('tasks').select('*').eq('id', selectedTask.id).maybeSingle().then(({ data }) => {
         if (data) setSelectedTask(data as Task);
@@ -85,8 +143,6 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
   function handleExportCSV() {
     if (filteredTasks.length === 0) return;
 
-    // Collect every key present across the exported tasks, so the export
-    // stays correct even as fields are added/removed from the schema.
     const headerSet = new Set<string>();
     filteredTasks.forEach(t => Object.keys(t).forEach(k => headerSet.add(k)));
     const headers = Array.from(headerSet);
@@ -94,7 +150,7 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
     const rows = [
       headers.join(','),
       ...filteredTasks.map(t =>
-        headers.map(h => escapeCsvValue((t as Record<string, unknown>)[h])).join(',')
+        headers.map(h => escapeCsvValue((t as unknown as Record<string, unknown>)[h])).join(',')
       ),
     ];
 
@@ -114,12 +170,18 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
   }
 
   const activeProject = filterProjectId ? projects.find(p => p.id === filterProjectId) : null;
-  const canAddTasks = canCreate || (filterProjectId && projectMemberIds.has(user?.id || ''));
+
+  // Global page actions stay role-gated; task edits are checked per project below.
+  const isMember = filterProjectId
+    ? projectAccessQuery.data?.memberProjectIds.has(filterProjectId) ?? false
+    : false;
+  const canEdit = canCreate || isMember;
+  const assigneeOptionsByProjectId = projectAccessQuery.data?.assigneeOptionsByProjectId ?? {};
 
   const viewButtons: { id: ViewMode; label: string; icon: typeof List }[] = [
-    { id: 'list', label: 'List', icon: List },
+    { id: 'list',  label: 'List',  icon: List },
     { id: 'board', label: 'Board', icon: LayoutGrid },
-    // { id: 'gantt', label: 'Gantt', icon: BarChart2 },
+    { id: 'gantt', label: 'Gantt', icon: BarChart2 },
   ];
 
   return (
@@ -198,7 +260,7 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
                 Export CSV
               </button>
 
-              {(canAddTasks || canCreate) && (
+              {canEdit && (
                 <>
                   <button
                     onClick={() => setShowImportModal(true)}
@@ -222,7 +284,7 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          {loading ? (
+          {tasksQuery.isLoading ? (
             <div className="space-y-4">
               {Array.from({ length: 3 }).map((_, i) => (
                 <div key={i} className="bg-white rounded-2xl h-32 animate-pulse shadow-sm" />
@@ -232,20 +294,23 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
             <ListView
               projects={filterProjectId ? projects.filter(p => p.id === filterProjectId) : projects}
               tasks={filteredTasks}
-              onRefresh={loadTasks}
+              onRefresh={() => tasksQuery.refetch()}
               onSelectTask={setSelectedTask}
               selectedTaskId={selectedTask?.id}
               filterProjectId={filterProjectId}
-              canAddTasks={canAddTasks || canCreate}
+              canEditTaskForProject={canEditTaskForProject}
+              assigneeOptionsByProjectId={assigneeOptionsByProjectId}
+              canManageAssigneeForProject={canManageAssigneeForProject}
             />
           ) : view === 'board' ? (
             <BoardView
               projects={filterProjectId ? projects.filter(p => p.id === filterProjectId) : projects}
               tasks={filteredTasks}
-              onRefresh={loadTasks}
+              onRefresh={() => tasksQuery.refetch()}
               onSelectTask={setSelectedTask}
               filterProjectId={filterProjectId}
-              canEdit={canAddTasks || canCreate}
+              canEdit={canEdit}
+              canEditTaskForProject={canEditTaskForProject}
             />
           ) : (
             <GanttView
@@ -258,19 +323,24 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
       </div>
 
       {selectedTask && (
-        <TaskDetailPanel
+          <TaskDetailModal
           task={selectedTask}
           onClose={() => setSelectedTask(null)}
           onUpdate={handleTaskUpdate}
-        />
+              canEdit={canEditTaskForProject(selectedTask.project_id)}
+              canManageAssignee={canManageAssigneeForProject(selectedTask.project_id)}
+              assigneeOptions={assigneeOptionsByProjectId[selectedTask.project_id] ?? []}
+            />
       )}
 
       {showAddModal && (
         <AddTaskModal
           projects={filterProjectId ? projects.filter(p => p.id === filterProjectId) : projects}
           defaultProjectId={filterProjectId}
+          assigneeOptionsByProjectId={assigneeOptionsByProjectId}
+          canManageAssigneeForProject={canManageAssigneeForProject}
           onClose={() => setShowAddModal(false)}
-          onCreated={loadTasks}
+          onCreated={() => tasksQuery.refetch()}
         />
       )}
 
@@ -279,7 +349,7 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
           projects={filterProjectId ? projects.filter(p => p.id === filterProjectId) : projects}
           defaultProjectId={filterProjectId}
           onClose={() => setShowImportModal(false)}
-          onImported={loadTasks}
+          onImported={() => tasksQuery.refetch()}
         />
       )}
     </div>

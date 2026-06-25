@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { X, UserPlus, Trash2, Search, Crown, User, Shield } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { Profile, ProjectMember, Project } from '../../types';
+import { queryKeys } from '../../lib/queryClient';
 
 interface Props {
   project: Project;
@@ -22,40 +24,36 @@ const USER_ROLE_BADGE: Record<string, string> = {
 
 export default function ProjectMembersModal({ project, onClose }: Props) {
   const { user, profile: myProfile } = useAuth();
-  const [members, setMembers] = useState<(ProjectMember & { profile: Profile })[]>([]);
-  const [allUsers, setAllUsers] = useState<Profile[]>([]);
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
 
   const isAdmin = myProfile?.role === 'admin';
   const isOwner = project.created_by === user?.id;
   const canManage = isAdmin || isOwner || myProfile?.role === 'manager';
 
-  async function load() {
-    const [{ data: mems }, { data: users }] = await Promise.all([
-      supabase
-        .from('project_members')
-        .select('*')
-        .eq('project_id', project.id),
-      supabase.from('profiles').select('*').order('full_name'),
-    ]);
+  const membersQuery = useQuery({
+    queryKey: queryKeys.projectMembers(project.id),
+    queryFn: async () => {
+      const [{ data: mems }, { data: users }] = await Promise.all([
+        supabase.from('project_members').select('*').eq('project_id', project.id),
+        supabase.from('profiles').select('*').eq('is_deleted', false).eq('status', true).order('full_name'),
+      ]);
 
-    const memberList = (mems ?? []) as ProjectMember[];
-    const profileMap: Record<string, Profile> = {};
-    (users ?? []).forEach(u => { profileMap[u.id] = u; });
+      const memberList = (mems ?? []) as ProjectMember[];
+      const profileMap: Record<string, Profile> = {};
+      (users ?? []).forEach(u => { profileMap[u.id] = u; });
 
-    setMembers(
-      memberList
-        .filter(m => profileMap[m.user_id])
-        .map(m => ({ ...m, profile: profileMap[m.user_id] }))
-    );
-    setAllUsers(users ?? []);
-    setLoading(false);
-  }
+      return {
+        members: memberList
+          .filter(m => profileMap[m.user_id])
+          .map(m => ({ ...m, profile: profileMap[m.user_id] })),
+        users: (users ?? []) as Profile[],
+      };
+    },
+  });
 
-  useEffect(() => { load(); }, [project.id]);
-
+  const members = membersQuery.data?.members ?? [];
+  const allUsers = membersQuery.data?.users ?? [];
   const memberIds = new Set(members.map(m => m.user_id));
   // Also exclude the project creator (they have implicit access)
   const availableUsers = allUsers.filter(u =>
@@ -66,27 +64,46 @@ export default function ProjectMembersModal({ project, onClose }: Props) {
       u.id.toLowerCase().includes(search.toLowerCase()))
   );
 
-  async function addMember(userId: string) {
-    setAdding(true);
-    await supabase.from('project_members').insert({
-      project_id: project.id,
-      user_id: userId,
-      role_in_project: 'member',
-    });
-    setAdding(false);
-    setSearch('');
-    load();
-  }
+  const addMemberMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const { error } = await supabase.from('project_members').insert({
+        project_id: project.id,
+        user_id: userId,
+        role_in_project: 'member',
+      });
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: async () => {
+      setSearch('');
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projectMembers(project.id) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projectsMeta });
+    },
+  });
 
-  async function removeMember(memberId: string) {
-    await supabase.from('project_members').delete().eq('id', memberId);
-    load();
-  }
+  const removeMemberMutation = useMutation({
+    mutationFn: async (memberId: string) => {
+      const { error } = await supabase.from('project_members').delete().eq('id', memberId);
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projectMembers(project.id) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projectsMeta });
+    },
+  });
 
-  async function changeRole(memberId: string, newRole: 'owner' | 'member') {
-    await supabase.from('project_members').update({ role_in_project: newRole }).eq('id', memberId);
-    load();
-  }
+  const changeRoleMutation = useMutation({
+    mutationFn: async ({ memberId, newRole }: { memberId: string; newRole: 'owner' | 'member' }) => {
+      const { error } = await supabase.from('project_members').update({ role_in_project: newRole }).eq('id', memberId);
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projectMembers(project.id) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projectsMeta });
+    },
+  });
 
   // Creator profile
   const creatorProfile = allUsers.find(u => u.id === project.created_by);
@@ -136,7 +153,7 @@ export default function ProjectMembersModal({ project, onClose }: Props) {
                 </div>
               )}
 
-              {loading ? (
+              {membersQuery.isLoading ? (
                 Array.from({ length: 2 }).map((_, i) => (
                   <div key={i} className="h-14 bg-gray-100 rounded-xl animate-pulse" />
                 ))
@@ -160,7 +177,7 @@ export default function ProjectMembersModal({ project, onClose }: Props) {
                       {canManage ? (
                         <select
                           value={m.role_in_project}
-                          onChange={e => changeRole(m.id, e.target.value as 'owner' | 'member')}
+                          onChange={e => changeRoleMutation.mutate({ memberId: m.id, newRole: e.target.value as 'owner' | 'member' })}
                           className={`text-xs px-2 py-1 rounded-lg border font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer ${badge.cls}`}
                         >
                           <option value="member">Member</option>
@@ -173,7 +190,7 @@ export default function ProjectMembersModal({ project, onClose }: Props) {
                       )}
                       {canManage && (
                         <button
-                          onClick={() => removeMember(m.id)}
+                          onClick={() => removeMemberMutation.mutate(m.id)}
                           className="p-1.5 text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -223,8 +240,8 @@ export default function ProjectMembersModal({ project, onClose }: Props) {
                         </span>
                       </div>
                       <button
-                        onClick={() => addMember(u.id)}
-                        disabled={adding}
+                        onClick={() => addMemberMutation.mutate(u.id)}
+                        disabled={addMemberMutation.isPending}
                         className="opacity-0 group-hover:opacity-100 flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
                       >
                         <UserPlus className="w-3 h-3" /> Add

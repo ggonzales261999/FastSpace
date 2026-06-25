@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { ChevronDown, ChevronRight, Plus, Trash2, MessageSquare, Pencil } from 'lucide-react';
-import { Task, Project, TaskStatus } from '../../types';
+import { Task, Project, TaskStatus, Profile } from '../../types';
 import TaskStatusBadge from './TaskStatusBadge';
 import AddTaskRow from './AddTaskRow';
 import { supabase } from '../../lib/supabase';
@@ -13,10 +13,12 @@ interface Props {
   onSelectTask: (task: Task) => void;
   selectedTaskId?: string;
   filterProjectId?: string;
-  canAddTasks?: boolean;
+  canEditTaskForProject: (projectId: string) => boolean;
+  assigneeOptionsByProjectId: Record<string, Profile[]>;
+  canManageAssigneeForProject: (projectId: string) => boolean;
 }
 
-type FieldType = 'text' | 'status' | 'datetime' | 'number';
+type FieldType = 'text' | 'status' | 'datetime' | 'number' | 'assignee';
 
 interface EditingCell {
   taskId: string;
@@ -67,6 +69,7 @@ interface CellProps {
   value: string | number | null | undefined;
   isEditing: boolean;
   canEdit: boolean;
+  selectOptions?: { value: string; label: string }[];
   onStartEdit: (taskId: string, field: string, current: string) => void;
   onSave: (taskId: string, field: string, fieldType: FieldType, value: string) => Promise<void>;
   onCancel: () => void;
@@ -77,6 +80,7 @@ interface CellProps {
 
 function EditableCell({
   taskId, field, fieldType, value, isEditing, canEdit,
+  selectOptions = [],
   onStartEdit, onSave, onCancel, editValue, setEditValue, displayClassName = ''
 }: CellProps) {
   const inputRef = useRef<HTMLInputElement | HTMLSelectElement>(null);
@@ -91,6 +95,9 @@ function EditableCell({
     if (fieldType === 'datetime') return formatDateTime(value as string) || '—';
     if (fieldType === 'number') return value ? `${value}h` : '—';
     if (fieldType === 'status') return <TaskStatusBadge status={value as TaskStatus} />;
+    if (fieldType === 'assignee') {
+      return selectOptions.find(option => option.value === String(value ?? ''))?.label || 'Unassigned';
+    }
     return (value as string) || '—';
   }
 
@@ -115,6 +122,23 @@ function EditableCell({
           <option value="doing">Doing</option>
           <option value="done">Done</option>
           <option value="hold">Hold</option>
+        </select>
+      );
+    }
+    if (fieldType === 'assignee') {
+      return (
+        <select
+          ref={inputRef as React.RefObject<HTMLSelectElement>}
+          value={editValue}
+          onChange={e => setEditValue(e.target.value)}
+          onBlur={() => onSave(taskId, field, fieldType, editValue)}
+          onKeyDown={handleKeyDown}
+          className={baseInput}
+        >
+          <option value="">Unassigned</option>
+          {selectOptions.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
         </select>
       );
     }
@@ -179,16 +203,15 @@ function EditableCell({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function ListView({
-  projects, tasks, onRefresh, onSelectTask, selectedTaskId, filterProjectId, canAddTasks: canAddFromProps,
+  projects, tasks, onRefresh, onSelectTask, selectedTaskId, filterProjectId, canEditTaskForProject,
+  assigneeOptionsByProjectId, canManageAssigneeForProject,
 }: Props) {
-  const { user, profile } = useAuth();
+  const { user } = useAuth();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [addingTaskFor, setAddingTaskFor] = useState<string | null>(null);
   const [addingSubtaskFor, setAddingSubtaskFor] = useState<string | null>(null);
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const [editValue, setEditValue] = useState('');
-
-  const canEdit = profile?.role === 'admin' || profile?.role === 'manager' || canAddFromProps;
 
   const visibleProjects = filterProjectId
     ? projects.filter(p => p.id === filterProjectId)
@@ -208,7 +231,7 @@ export default function ListView({
 
   async function deleteTask(id: string) {
     if (!confirm('Delete this task?')) return;
-    await supabase.from('tasks').delete().eq('id', id);
+    await supabase.from('tasks').update({ is_deleted: true, is_active: false, updated_at: new Date().toISOString() }).eq('id', id);
     onRefresh();
   }
 
@@ -232,6 +255,22 @@ export default function ListView({
     let stored: string | number | null = value || null;
     if (fieldType === 'datetime') stored = toISO(value);
     if (fieldType === 'number') stored = value ? parseFloat(value) : null;
+
+    const normalizedOldValue = (() => {
+      if (oldVal === null || oldVal === undefined) return '';
+      if (fieldType === 'datetime') return toDatetimeLocal(String(oldVal));
+      if (fieldType === 'number') return String(typeof oldVal === 'number' ? oldVal : parseFloat(String(oldVal)));
+      return String(oldVal);
+    })();
+
+    const normalizedNewValue = (() => {
+      if (stored === null || stored === undefined) return '';
+      if (fieldType === 'datetime') return toDatetimeLocal(stored as string | null | undefined);
+      if (fieldType === 'number') return String(stored);
+      return String(stored);
+    })();
+
+    if (normalizedOldValue === normalizedNewValue) return;
 
     const updateData: Record<string, string | number | null> = {
       [field]: stored,
@@ -274,6 +313,7 @@ export default function ListView({
   function getTaskValue(task: Task, field: string): string | number | null | undefined {
     if (field === 'title') return task.title;
     if (field === 'status') return task.status;
+    if (field === 'assigned_to') return task.assigned_to;
     if (field === 'planned_start') return task.planned_start;
     if (field === 'planned_end') return task.planned_end;
     if (field === 'actual_start') return task.actual_start;
@@ -288,7 +328,7 @@ export default function ListView({
     fieldType,
     value: getTaskValue(task, field),
     isEditing: editingCell?.taskId === task.id && editingCell?.field === field,
-    canEdit: !!canEdit,
+    canEdit: fieldType === 'assignee' ? canManageAssigneeForProject(task.project_id) : canEditTaskForProject(task.project_id),
     onStartEdit: startEdit,
     onSave: saveCell,
     onCancel: cancelEdit,
@@ -356,6 +396,18 @@ export default function ListView({
             <EditableCell {...cellProps(task, 'status', 'status')} />
           </td>
 
+          {/* Assignee */}
+          <td className={tdCls + ' w-44'}>
+            <EditableCell
+              {...cellProps(task, 'assigned_to', 'assignee')}
+              selectOptions={(assigneeOptionsByProjectId[task.project_id] ?? []).map(person => ({
+                value: person.id,
+                label: person.full_name,
+              }))}
+              displayClassName="text-gray-700"
+            />
+          </td>
+
           {/* Planned Start */}
           <td className={tdCls + ' w-44'}>
             <EditableCell {...cellProps(task, 'planned_start', 'datetime')} displayClassName="text-gray-600" />
@@ -383,7 +435,7 @@ export default function ListView({
 
           {/* Delete */}
           <td className="pr-3 py-2.5 w-10">
-            {canEdit && (
+            {canEditTaskForProject(task.project_id) && (
               <button
                 onClick={e => { e.stopPropagation(); deleteTask(task.id); }}
                 className="opacity-0 group-hover/row:opacity-100 p-1.5 rounded-md text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all"
@@ -400,9 +452,9 @@ export default function ListView({
             {taskSubtasks.map((sub): JSX.Element => renderTaskRow(sub, 1))}
 
             {/* Add subtask row */}
-            {canEdit && (
+            {canEditTaskForProject(task.project_id) && (
               <tr key={`${task.id}-add-sub`} className="border-b border-gray-100/60">
-                <td colSpan={9} className="pl-10 pr-4 py-1.5 bg-slate-50/40">
+                <td colSpan={10} className="pl-10 pr-4 py-1.5 bg-slate-50/40">
                   {addingSubtaskFor === task.id ? (
                     <AddTaskRow
                       label="New subtask title..."
@@ -470,6 +522,7 @@ export default function ListView({
                       <th className="w-8"></th>
                       <th className={thCls}>Task</th>
                       <th className={thCls + ' w-32'}>Status</th>
+                      <th className={thCls + ' w-44'}>Assignee</th>
                       <th className={thCls + ' w-44'}>Planned Start</th>
                       <th className={thCls + ' w-44'}>Planned End</th>
                       <th className={thCls + ' w-44'}>Actual Start</th>
@@ -481,17 +534,17 @@ export default function ListView({
                   <tbody>
                     {projectMainTasks.length === 0 && (
                       <tr>
-                        <td colSpan={9} className="px-5 py-8 text-center text-sm text-gray-400">
-                          No tasks yet. {canEdit && 'Click "Add Task" below to get started.'}
+                        <td colSpan={10} className="px-5 py-8 text-center text-sm text-gray-400">
+                          No tasks yet. {canEditTaskForProject(project.id) && 'Click "Add Task" below to get started.'}
                         </td>
                       </tr>
                     )}
                     {projectMainTasks.map(task => renderTaskRow(task, 0))}
 
                     {/* Add task */}
-                    {canEdit && (
+                    {canEditTaskForProject(project.id) && (
                       <tr>
-                        <td colSpan={9} className="px-5 py-2.5">
+                        <td colSpan={10} className="px-5 py-2.5">
                           {addingTaskFor === project.id ? (
                             <AddTaskRow
                               label="New task title..."

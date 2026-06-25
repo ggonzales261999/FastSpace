@@ -1,43 +1,41 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useFontSize } from '../context/FontSizeContext';
 import { supabase } from '../lib/supabase';
-import { User, Shield, Users } from 'lucide-react';
-import { Profile, UserRole } from '../types';
+import { User, Shield, Building2, Type, Minus, Plus } from 'lucide-react';
+import { UserRole, Department } from '../types';
 
 const ROLE_INFO: Record<UserRole, { label: string; color: string; desc: string }> = {
-  admin: { label: 'Admin', color: 'text-red-600 bg-red-50 border-red-200', desc: 'Full access: create/delete projects, manage all users, access all tasks.' },
+  admin:   { label: 'Admin',   color: 'text-red-600 bg-red-50 border-red-200',     desc: 'Full access: create/delete projects, manage all users, access all tasks.' },
   manager: { label: 'Manager', color: 'text-amber-600 bg-amber-50 border-amber-200', desc: 'Can create projects, add tasks, assign to users, view all tasks.' },
-  user: { label: 'User', color: 'text-blue-600 bg-blue-50 border-blue-200', desc: 'Can view and update tasks assigned to them.' },
-};
-
-const ROLE_BADGE: Record<UserRole, string> = {
-  admin: 'bg-red-50 text-red-700 border border-red-200',
-  manager: 'bg-amber-50 text-amber-700 border border-amber-200',
-  user: 'bg-blue-50 text-blue-700 border border-blue-200',
+  user:    { label: 'User',    color: 'text-blue-600 bg-blue-50 border-blue-200',  desc: 'Can view and update tasks assigned to them.' },
 };
 
 export default function SettingsPage() {
   const { profile, refreshProfile } = useAuth();
+  const { fontSize, setFontSize } = useFontSize();
   const [fullName, setFullName] = useState(profile?.full_name ?? '');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
 
-  const [allUsers, setAllUsers] = useState<Profile[]>([]);
-  const [updatingRole, setUpdatingRole] = useState<string | null>(null);
-
-  const isAdmin = profile?.role === 'admin';
+  const [departments, setDepartments] = useState<Department[]>([]);
 
   useEffect(() => {
-    if (!isAdmin) return;
-    supabase.from('profiles').select('*').order('created_at').then(({ data }) => setAllUsers(data ?? []));
-  }, [isAdmin]);
+    supabase.from('departments').select('*').order('name').then(({ data }) => setDepartments(data ?? []));
+  }, []);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
     setError('');
-    const { error } = await supabase.from('profiles').update({ full_name: fullName, updated_at: new Date().toISOString() }).eq('id', profile!.id);
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        full_name: fullName,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', profile!.id);
     setSaving(false);
     if (error) { setError(error.message); return; }
     await refreshProfile();
@@ -45,22 +43,15 @@ export default function SettingsPage() {
     setTimeout(() => setSaved(false), 2500);
   }
 
-  async function changeRole(userId: string, newRole: UserRole) {
-    setUpdatingRole(userId);
-    await supabase.from('profiles').update({ role: newRole, updated_at: new Date().toISOString() }).eq('id', userId);
-    setAllUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u));
-    if (userId === profile?.id) await refreshProfile();
-    setUpdatingRole(null);
-  }
-
   if (!profile) return null;
 
   const roleInfo = ROLE_INFO[profile.role];
+  const departmentName = departments.find(d => d.id === profile.department_id)?.name;
 
   return (
     <div className="flex-1 overflow-y-auto" style={{ background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)' }}>
       <div className="max-w-2xl mx-auto px-6 py-8 space-y-5">
-        <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
+        <h1 className="text-2xl font-bold text-gray-900">User Profile</h1>
 
         {/* Profile */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
@@ -73,14 +64,24 @@ export default function SettingsPage() {
               <input
                 value={fullName}
                 onChange={e => setFullName(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
               />
             </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-1.5">
+                <Building2 className="w-4 h-4" /> Department
+              </label>
+              <div className="w-full px-3 py-2.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700">
+                {departmentName ?? 'No department assigned'}
+              </div>
+            </div>
+
             {error && <p className="text-sm text-red-600">{error}</p>}
             <button
               type="submit"
               disabled={saving}
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg text-sm font-semibold transition-colors"
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-xl text-sm font-semibold transition-colors"
             >
               {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Changes'}
             </button>
@@ -99,42 +100,48 @@ export default function SettingsPage() {
           <p className="text-sm text-gray-500 mt-3">{roleInfo.desc}</p>
         </div>
 
-        {/* Admin: User Management */}
-        {isAdmin && (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <h2 className="text-base font-semibold text-gray-800 mb-4 flex items-center gap-2">
-              <Users className="w-4 h-4 text-gray-500" /> User Management
-            </h2>
-            <div className="space-y-2">
-              {allUsers.map(u => (
-                <div key={u.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-gray-100 hover:bg-gray-50/60 transition-colors">
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-slate-200 to-slate-300 flex items-center justify-center text-xs font-bold text-slate-600 flex-shrink-0">
-                    {u.full_name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || 'U'}
+        {/* Font Size */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-4 flex items-center gap-2">
+            <Type className="w-4 h-4 text-gray-500" /> Accessibility
+          </h2>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Font Size</label>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setFontSize(fontSize - 0.1)}
+                  disabled={fontSize <= 0.75}
+                  className="w-10 h-10 flex items-center justify-center rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Minus className="w-4 h-4 text-gray-600" />
+                </button>
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="px-4 py-2 bg-gray-50 rounded-xl border border-gray-200 min-w-[80px] text-center">
+                    <span className="text-sm font-semibold text-gray-700">{Math.round(fontSize * 100)}%</span>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-800 truncate">
-                      {u.full_name || 'Unnamed'}
-                      {u.id === profile.id && <span className="ml-1.5 text-xs text-gray-400">(you)</span>}
-                    </p>
-                  </div>
-                  <select
-                    value={u.role}
-                    onChange={e => changeRole(u.id, e.target.value as UserRole)}
-                    disabled={updatingRole === u.id}
-                    className={`text-xs font-semibold px-2.5 py-1.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400/40 cursor-pointer transition-colors ${ROLE_BADGE[u.role]}`}
-                  >
-                    <option value="user">User</option>
-                    <option value="manager">Manager</option>
-                    <option value="admin">Admin</option>
-                  </select>
                 </div>
-              ))}
-              {allUsers.length === 0 && (
-                <p className="text-sm text-gray-400 text-center py-4">No users found.</p>
-              )}
+                <button
+                  onClick={() => setFontSize(fontSize + 0.1)}
+                  disabled={fontSize >= 1.5}
+                  className="w-10 h-10 flex items-center justify-center rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Plus className="w-4 h-4 text-gray-600" />
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mt-2 text-center">
+                Adjust text size for better readability (75% - 150%)
+              </p>
+            </div>
+
+            <div className="pt-3 border-t border-gray-100">
+              <p className="text-sm text-gray-600" style={{ fontSize: `${fontSize * 14}px` }}>
+                Preview: This is how your text will look with the current font size setting.
+              </p>
             </div>
           </div>
-        )}
+        </div>
+
       </div>
     </div>
   );

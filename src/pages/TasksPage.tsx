@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LayoutGrid, List, BarChart2, Plus, Search, Upload, Download } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -27,6 +27,7 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
   const [showImportModal, setShowImportModal] = useState(false);
   const [search, setSearch] = useState('');
 
+  // Only admins and managers have global create permissions
   const canCreate = profile?.role === 'admin' || profile?.role === 'manager';
   const visibleProjectIds = useMemo(() => projects.map(project => project.id), [projects]);
 
@@ -47,24 +48,48 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
   const projectAccessQuery = useQuery({
     queryKey: [...queryKeys.projectMembers(filterProjectId ?? 'all-visible'), user?.id ?? 'anon', visibleProjectIds.join(',')],
     enabled: !!user && visibleProjectIds.length > 0,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    staleTime: 0,
     queryFn: async () => {
+     
+      const { data: memberData, error: memberError } = await supabase
+        .from('project_members')
+        .select('project_id, user_id')
+        .in('project_id', visibleProjectIds);
+
+      if (memberError) {
+        console.error('❌ Error fetching member data:', memberError);
+        throw memberError;
+      }
+
+      // Get all unique user IDs from members
+      const memberUserIds = [...new Set(memberData?.map(row => row.user_id) || [])];
+      
+      // Fetch profiles for all member users
+      let profilesMap: Record<string, Profile> = {};
+      if (memberUserIds.length > 0) {
+        const { data: profilesData, error: profilesError } = await supabase
+          .from('profiles')
+          .select('id, full_name, department_id, role')
+          .in('id', memberUserIds);
+
+        if (profilesError) {
+          console.error('❌ Error fetching profiles:', profilesError);
+        } else {
+          profilesMap = (profilesData || []).reduce((acc, p) => {
+            acc[p.id] = p as Profile;
+            return acc;
+          }, {} as Record<string, Profile>);
+        }
+      }
+
+      // Also fetch creator profiles
       const creatorIds = [...new Set(projects.map(p => p.created_by))];
-
-      const [{ data: memberData }, { data: creatorProfiles }] = await Promise.all([
-        supabase
-          .from('project_members')
-          .select('project_id,user_id, profile:profiles(id,full_name,department_id,role)')
-          .in('project_id', visibleProjectIds),
-        creatorIds.length > 0
-          ? supabase.from('profiles').select('id,full_name,department_id,role').in('id', creatorIds)
-          : Promise.resolve({ data: [] }),
-      ]);
-
-      const memberRows = (memberData ?? []) as unknown as Array<{
-        project_id: string;
-        user_id: string;
-        profile?: Profile | null;
-      }>;
+      const { data: creatorProfiles } = creatorIds.length > 0
+        ? await supabase.from('profiles').select('id, full_name, department_id, role').in('id', creatorIds)
+        : { data: [] };
 
       const creatorProfileMap: Record<string, Profile> = {};
       (creatorProfiles ?? []).forEach(p => { creatorProfileMap[p.id] = p as Profile; });
@@ -76,23 +101,26 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
         const options: Profile[] = [];
         const seen = new Set<string>();
 
-        // Project creator always has edit access and is always an assignee option
-        if (project.created_by === user?.id) {
-          memberProjectIds.add(project.id);
-        }
+        // Add creator as an assignee option
         const creatorProfile = creatorProfileMap[project.created_by];
         if (creatorProfile && !seen.has(creatorProfile.id)) {
           options.push(creatorProfile);
           seen.add(creatorProfile.id);
         }
 
-        const projectMemberRows = memberRows.filter(row => row.project_id === project.id);
-        if (projectMemberRows.some(row => row.user_id === user?.id)) {
+        // Get member rows for this project
+        const projectMemberRows = memberData?.filter(row => row.project_id === project.id) || [];
+        
+        // Check if current user is a member
+        const isMember = projectMemberRows.some(row => row.user_id === user?.id);
+        
+        if (isMember) {
           memberProjectIds.add(project.id);
         }
 
+        // Add member profiles to assignee options
         for (const row of projectMemberRows) {
-          const profileItem = row.profile ?? undefined;
+          const profileItem = profilesMap[row.user_id];
           if (profileItem && !seen.has(profileItem.id)) {
             options.push(profileItem);
             seen.add(profileItem.id);
@@ -106,12 +134,17 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
     },
   });
 
-  const canManageAssigneeForProject = (projectId: string) => (
-    canCreate || projectAccessQuery.data?.memberProjectIds.has(projectId) || false
-  );
-  const canEditTaskForProject = (projectId: string) => (
-    canCreate || projectAccessQuery.data?.memberProjectIds.has(projectId) || false
-  );
+  // Check if user can manage assignees for a project
+  const canManageAssigneeForProject = (projectId: string) => {
+    if (canCreate) return true;
+    return projectAccessQuery.data?.memberProjectIds.has(projectId) || false;
+  };
+
+  // Check if user can edit tasks for a project
+  const canEditTaskForProject = (projectId: string) => {
+    if (canCreate) return true;
+    return projectAccessQuery.data?.memberProjectIds.has(projectId) || false;
+  };
 
   const filteredTasks = useMemo(() => (tasksQuery.data ?? []).filter(t => {
     const matchesVisibleProjects = projects.some(project => project.id === t.project_id);
@@ -171,12 +204,34 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
 
   const activeProject = filterProjectId ? projects.find(p => p.id === filterProjectId) : null;
 
-  // Global page actions stay role-gated; task edits are checked per project below.
   const isMember = filterProjectId
     ? projectAccessQuery.data?.memberProjectIds.has(filterProjectId) ?? false
     : false;
+  
   const canEdit = canCreate || isMember;
   const assigneeOptionsByProjectId = projectAccessQuery.data?.assigneeOptionsByProjectId ?? {};
+
+  console.log('🔐 Permission state:', {
+    userId: user?.id,
+    userRole: profile?.role,
+    filterProjectId,
+    canCreate,
+    isMember,
+    canEdit,
+    memberProjectIds: projectAccessQuery.data ? Array.from(projectAccessQuery.data.memberProjectIds) : [],
+    projectAccessData: projectAccessQuery.data,
+    isLoading: projectAccessQuery.isLoading,
+    isFetching: projectAccessQuery.isFetching,
+    isError: projectAccessQuery.isError,
+    error: projectAccessQuery.error,
+  });
+
+  useEffect(() => {
+    if (filterProjectId && user) {
+      console.log('🔄 Filter project changed, refetching project access...');
+      projectAccessQuery.refetch();
+    }
+  }, [filterProjectId, user]);
 
   const viewButtons: { id: ViewMode; label: string; icon: typeof List }[] = [
     { id: 'list',  label: 'List',  icon: List },
@@ -294,7 +349,10 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
             <ListView
               projects={filterProjectId ? projects.filter(p => p.id === filterProjectId) : projects}
               tasks={filteredTasks}
-              onRefresh={() => tasksQuery.refetch()}
+              onRefresh={() => {
+                tasksQuery.refetch();
+                projectAccessQuery.refetch();
+              }}
               onSelectTask={setSelectedTask}
               selectedTaskId={selectedTask?.id}
               filterProjectId={filterProjectId}
@@ -306,7 +364,10 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
             <BoardView
               projects={filterProjectId ? projects.filter(p => p.id === filterProjectId) : projects}
               tasks={filteredTasks}
-              onRefresh={() => tasksQuery.refetch()}
+              onRefresh={() => {
+                tasksQuery.refetch();
+                projectAccessQuery.refetch();
+              }}
               onSelectTask={setSelectedTask}
               filterProjectId={filterProjectId}
               canEdit={canEdit}
@@ -323,14 +384,14 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
       </div>
 
       {selectedTask && (
-          <TaskDetailModal
+        <TaskDetailModal
           task={selectedTask}
           onClose={() => setSelectedTask(null)}
           onUpdate={handleTaskUpdate}
-              canEdit={canEditTaskForProject(selectedTask.project_id)}
-              canManageAssignee={canManageAssigneeForProject(selectedTask.project_id)}
-              assigneeOptions={assigneeOptionsByProjectId[selectedTask.project_id] ?? []}
-            />
+          canEdit={canEditTaskForProject(selectedTask.project_id)}
+          canManageAssignee={canManageAssigneeForProject(selectedTask.project_id)}
+          assigneeOptions={assigneeOptionsByProjectId[selectedTask.project_id] ?? []}
+        />
       )}
 
       {showAddModal && (
@@ -340,7 +401,10 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
           assigneeOptionsByProjectId={assigneeOptionsByProjectId}
           canManageAssigneeForProject={canManageAssigneeForProject}
           onClose={() => setShowAddModal(false)}
-          onCreated={() => tasksQuery.refetch()}
+          onCreated={() => {
+            tasksQuery.refetch();
+            projectAccessQuery.refetch();
+          }}
         />
       )}
 
@@ -349,7 +413,10 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
           projects={filterProjectId ? projects.filter(p => p.id === filterProjectId) : projects}
           defaultProjectId={filterProjectId}
           onClose={() => setShowImportModal(false)}
-          onImported={() => tasksQuery.refetch()}
+          onImported={() => {
+            tasksQuery.refetch();
+            projectAccessQuery.refetch();
+          }}
         />
       )}
     </div>

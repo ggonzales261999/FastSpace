@@ -53,7 +53,7 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
     refetchOnReconnect: true,
     staleTime: 0,
     queryFn: async () => {
-     
+      // Fetch project members separately (without the profile relationship)
       const { data: memberData, error: memberError } = await supabase
         .from('project_members')
         .select('project_id, user_id')
@@ -114,7 +114,11 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
         // Check if current user is a member
         const isMember = projectMemberRows.some(row => row.user_id === user?.id);
         
-        if (isMember) {
+        // Check if current user is the project creator
+        const isCreator = project.created_by === user?.id;
+        
+        // User has access if they're a member OR the creator
+        if (isMember || isCreator) {
           memberProjectIds.add(project.id);
         }
 
@@ -136,14 +140,22 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
 
   // Check if user can manage assignees for a project
   const canManageAssigneeForProject = (projectId: string) => {
+    // Admins and managers can always manage assignees
     if (canCreate) return true;
-    return projectAccessQuery.data?.memberProjectIds.has(projectId) || false;
+    // Check if user is a member OR creator of the project
+    const isMember = projectAccessQuery.data?.memberProjectIds.has(projectId) || false;
+    const isCreator = projects.find(p => p.id === projectId)?.created_by === user?.id;
+    return isMember || isCreator;
   };
 
   // Check if user can edit tasks for a project
   const canEditTaskForProject = (projectId: string) => {
+    // Admins and managers can always edit
     if (canCreate) return true;
-    return projectAccessQuery.data?.memberProjectIds.has(projectId) || false;
+    // Check if user is a member OR creator of the project
+    const isMember = projectAccessQuery.data?.memberProjectIds.has(projectId) || false;
+    const isCreator = projects.find(p => p.id === projectId)?.created_by === user?.id;
+    return isMember || isCreator;
   };
 
   const filteredTasks = useMemo(() => (tasksQuery.data ?? []).filter(t => {
@@ -204,31 +216,36 @@ export default function TasksPage({ projects, filterProjectId, onProjectIdChange
 
   const activeProject = filterProjectId ? projects.find(p => p.id === filterProjectId) : null;
 
-  const isMember = filterProjectId
-    ? projectAccessQuery.data?.memberProjectIds.has(filterProjectId) ?? false
+  // Check if user has access to the current project
+  const hasProjectAccess = filterProjectId
+    ? (() => {
+        const isMember = projectAccessQuery.data?.memberProjectIds.has(filterProjectId) || false;
+        const isCreator = projects.find(p => p.id === filterProjectId)?.created_by === user?.id;
+        return isMember || isCreator;
+      })()
     : false;
   
-  const canEdit = canCreate || isMember;
+  // User can edit if they're an admin/manager OR they have project access
+  const canEdit = canCreate || hasProjectAccess;
   const assigneeOptionsByProjectId = projectAccessQuery.data?.assigneeOptionsByProjectId ?? {};
 
-  console.log('🔐 Permission state:', {
-    userId: user?.id,
-    userRole: profile?.role,
-    filterProjectId,
-    canCreate,
-    isMember,
-    canEdit,
-    memberProjectIds: projectAccessQuery.data ? Array.from(projectAccessQuery.data.memberProjectIds) : [],
-    projectAccessData: projectAccessQuery.data,
-    isLoading: projectAccessQuery.isLoading,
-    isFetching: projectAccessQuery.isFetching,
-    isError: projectAccessQuery.isError,
-    error: projectAccessQuery.error,
-  });
+  // console.log('🔐 Permission state:', {
+  //   userId: user?.id,
+  //   userRole: profile?.role,
+  //   filterProjectId,
+  //   canCreate,
+  //   hasProjectAccess,
+  //   canEdit,
+  //   memberProjectIds: projectAccessQuery.data ? Array.from(projectAccessQuery.data.memberProjectIds) : [],
+  //   projectAccessData: projectAccessQuery.data,
+  //   isLoading: projectAccessQuery.isLoading,
+  //   isFetching: projectAccessQuery.isFetching,
+  //   isError: projectAccessQuery.isError,
+  //   error: projectAccessQuery.error,
+  // });
 
   useEffect(() => {
     if (filterProjectId && user) {
-      console.log('🔄 Filter project changed, refetching project access...');
       projectAccessQuery.refetch();
     }
   }, [filterProjectId, user]);

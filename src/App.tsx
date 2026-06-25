@@ -10,6 +10,7 @@ import TasksPage from './pages/TasksPage';
 import SettingsPage from './pages/SettingsPage';
 import DepartmentsPage from './pages/DepartmentsPage';
 import UserManagementPage from './pages/UserManagementPage';
+import ReportsPage from './pages/ReportsPage';
 import ProjectModal from './components/modals/ProjectModal';
 import { supabase } from './lib/supabase';
 import { Department, Profile, Project } from './types';
@@ -44,7 +45,11 @@ function AppShell() {
           .eq('user_id', user!.id),
       ]);
 
-      const visibleByDept = filterVisibleProjects(currentProfile as Profile | null, (projects ?? []) as Project[]);
+      const visibleByDept = filterVisibleProjects(
+        currentProfile as Profile | null,
+        (projects ?? []) as Project[],
+        new Set((memberProjects ?? []).map(m => m.project_id)),
+      );
       const memberProjectIds = new Set((memberProjects ?? []).map(m => m.project_id));
 
       // Combine: projects visible by department + projects user is a member of
@@ -142,6 +147,7 @@ function AppShell() {
             onProjectIdChange={id => setActiveProjectId(id)}
           />
         )}
+        {activePage === 'reports' && <ReportsPage />}
         {activePage === 'departments' && <DepartmentsPage />}
         {activePage === 'user-management' && <UserManagementPage />}
         {activePage === 'settings' && <SettingsPage />}

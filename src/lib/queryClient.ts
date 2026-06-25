@@ -19,4 +19,5 @@ export const queryKeys = {
   projectMembers: (projectId: string) => ['project-members', projectId] as const,
   taskDetail: (taskId: string) => ['task-detail', taskId] as const,
   dashboard: ['dashboard'] as const,
+  reports: ['reports'] as const,
 };

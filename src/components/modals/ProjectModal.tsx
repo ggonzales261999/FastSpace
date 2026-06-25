@@ -68,6 +68,7 @@ export default function ProjectModal({ onClose, onCreated }: Props) {
   const createProjectMutation = useMutation({
     mutationFn: async () => {
       if (!name.trim()) throw new Error('Project name is required');
+      if (!departmentId) throw new Error('Department is required');
 
       const { data: project, error: projError } = await supabase
         .from('projects')
@@ -153,10 +154,10 @@ export default function ProjectModal({ onClose, onCreated }: Props) {
               />
             </div>
 
-            {/* Department */}
+            {/* Department (required) */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-1.5">
-                <Building2 className="w-4 h-4" /> Department
+                <Building2 className="w-4 h-4" /> Department <span className="text-red-500">*</span>
               </label>
               {departments.length === 0 ? (
                 <p className="text-xs text-gray-400 px-3 py-2 bg-gray-50 rounded-xl border border-gray-200">
@@ -164,17 +165,6 @@ export default function ProjectModal({ onClose, onCreated }: Props) {
                 </p>
               ) : (
                 <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setDepartmentId('')}
-                    className={`px-3 py-2 rounded-xl text-sm text-left transition-all border ${
-                      departmentId === ''
-                        ? 'border-blue-400 bg-blue-50 text-blue-700 font-medium'
-                        : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
-                    }`}
-                  >
-                    None
-                  </button>
                   {departments.map(d => (
                     <button
                       key={d.id}
@@ -302,7 +292,7 @@ export default function ProjectModal({ onClose, onCreated }: Props) {
             </button>
             <button
               type="submit"
-              disabled={createProjectMutation.isPending || !name.trim()}
+              disabled={createProjectMutation.isPending || !name.trim() || !departmentId}
               className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-xl text-sm font-semibold transition-colors"
             >
               {createProjectMutation.isPending ? 'Creating...' : 'Create Project'}

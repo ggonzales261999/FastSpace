@@ -43,18 +43,20 @@ export default function ProjectsPage({ onNavigate, onRefreshProjects }: {
     queryKey: [...queryKeys.projectsMeta, profile?.id ?? 'anon', profile?.department_id ?? 'none', profile?.role ?? 'unknown'],
     enabled: !!profile,
     queryFn: async () => {
-      const [{ data: projs }, { data: mems }] = await Promise.all([
+      const [{ data: projs }, { data: mems }, { data: userMems }] = await Promise.all([
         supabase.from('projects').select('*').eq('is_deleted', false).eq('status', true).order('created_at', { ascending: false }),
         supabase.from('project_members').select('project_id'),
+        supabase.from('project_members').select('project_id').eq('user_id', profile!.id),
       ]);
 
       const memCountMap: Record<string, number> = {};
       (mems ?? []).forEach(m => {
         memCountMap[m.project_id] = (memCountMap[m.project_id] ?? 0) + 1;
       });
+      const memberProjectIds = new Set((userMems ?? []).map(m => m.project_id));
 
       return {
-        projects: filterVisibleProjects(profile, (projs ?? []) as Project[]),
+        projects: filterVisibleProjects(profile, (projs ?? []) as Project[], memberProjectIds),
         memberCountMap: memCountMap,
       };
     },

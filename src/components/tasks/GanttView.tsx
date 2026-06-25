@@ -199,7 +199,7 @@ export default function GanttView({ projects, tasks, filterProjectId }: Props) {
     });
   });
 
-  // ── Excel export ─────────────────────────────────────────────────────────────
+  // ── Excel export with styling ─────────────────────────────────────────────────
   async function handleExportExcel() {
     setExporting(true);
     try {
@@ -210,63 +210,311 @@ export default function GanttView({ projects, tasks, filterProjectId }: Props) {
         (data ?? []).forEach(p => { profileMap[p.id] = p.full_name; });
       }
       const projectNameMap: Record<string, string> = {};
-      projects.forEach(p => { projectNameMap[p.id] = p.name; });
+      const projectColorMap: Record<string, string> = {};
+      projects.forEach(p => {
+        projectNameMap[p.id] = p.name;
+        projectColorMap[p.id] = p.color;
+      });
 
-      // Sheet 1 — Gantt
+      // Sheet 1 — Gantt Chart
       type GRow = (string | number)[];
-      const ganttData: GRow[] = [['#', 'Activity', 'Type', 'Planned Start', 'Planned End', 'Duration (days)', 'Status', 'Est. Hours']];
+      const ganttData: GRow[] = [['#', 'Activity', 'Type', 'Planned Start', 'Planned End', 'Duration (days)', 'Status', 'Est. Hours', 'Assignee']];
+      const projectRows: number[] = [];
       let n = 0;
+      let currentRow = 1;
+
       visibleProjects.forEach(project => {
-        ganttData.push(['', project.name.toUpperCase(), 'PROJECT', '', '', '', '', '']);
+        projectRows.push(currentRow);
+        ganttData.push(['', project.name.toUpperCase(), 'PROJECT', '', '', '', '', '', '']);
+        currentRow++;
+
         mainTasks.filter(t => t.project_id === project.id).forEach(task => {
           n++;
-          ganttData.push([n, task.title, 'Task',
+          const assignee = task.assigned_to ? (profileMap[task.assigned_to] ?? 'Unknown') : '';
+          ganttData.push([
+            n, task.title, 'Task',
             fmtForExcel(task.planned_start), fmtForExcel(task.planned_end),
             durationDays(task.planned_start, task.planned_end),
-            STATUS_LABEL[task.status] ?? task.status, task.estimated_hours ?? '']);
+            STATUS_LABEL[task.status] ?? task.status,
+            task.estimated_hours ?? '',
+            assignee
+          ]);
+          currentRow++;
+
           (subtaskMap[task.id] ?? []).forEach(sub => {
-            ganttData.push(['', `  ↳ ${sub.title}`, 'Subtask',
+            const subAssignee = sub.assigned_to ? (profileMap[sub.assigned_to] ?? 'Unknown') : '';
+            ganttData.push([
+              '', `  ↳ ${sub.title}`, 'Subtask',
               fmtForExcel(sub.planned_start), fmtForExcel(sub.planned_end),
               durationDays(sub.planned_start, sub.planned_end),
-              STATUS_LABEL[sub.status] ?? sub.status, sub.estimated_hours ?? '']);
+              STATUS_LABEL[sub.status] ?? sub.status,
+              sub.estimated_hours ?? '',
+              subAssignee
+            ]);
+            currentRow++;
           });
         });
       });
+
       const ganttSheet = XLSX.utils.aoa_to_sheet(ganttData);
       ganttSheet['!cols'] = [
-        { wch: 5 }, { wch: 42 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 12 },
+        { wch: 5 }, { wch: 42 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 20 },
       ];
+
+      // Apply styles to cells
+      const headerStyle = {
+        font: { bold: true, color: { rgb: 'FFFFFF' } },
+        fill: { fgColor: { rgb: '1E3A5F' } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        border: {
+          top: { style: 'thin', color: { rgb: '1E3A5F' } },
+          bottom: { style: 'thin', color: { rgb: '1E3A5F' } },
+          left: { style: 'thin', color: { rgb: 'CCCCCC' } },
+          right: { style: 'thin', color: { rgb: 'CCCCCC' } }
+        }
+      };
+
+      const projectStyle = (projectColor: string) => ({
+        font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 11 },
+        fill: { fgColor: { rgb: projectColor.replace('#', '') } },
+        alignment: { horizontal: 'left', vertical: 'center' },
+        border: {
+          top: { style: 'medium' },
+          bottom: { style: 'medium' },
+          left: { style: 'thin' },
+          right: { style: 'thin' }
+        }
+      });
+
+      const statusStyles: Record<string, XLSX.CellStyle> = {
+        todo: {
+          fill: { fgColor: { rgb: 'F1F5F9' } },
+          font: { color: { rgb: '64748B' } }
+        },
+        doing: {
+          fill: { fgColor: { rgb: 'FEF3C7' } },
+          font: { color: { rgb: '92400E' } }
+        },
+        done: {
+          fill: { fgColor: { rgb: 'D1FAE5' } },
+          font: { color: { rgb: '065F46' } }
+        },
+        hold: {
+          fill: { fgColor: { rgb: 'FEE2E2' } },
+          font: { color: { rgb: '991B1B' } }
+        }
+      };
+
+      const cellStyle = {
+        border: {
+          top: { style: 'thin', color: { rgb: 'E5E7EB' } },
+          bottom: { style: 'thin', color: { rgb: 'E5E7EB' } },
+          left: { style: 'thin', color: { rgb: 'E5E7EB' } },
+          right: { style: 'thin', color: { rgb: 'E5E7EB' } }
+        },
+        alignment: { vertical: 'center' }
+      };
+
+      // Apply header styles
+      const range = XLSX.utils.decode_range(ganttSheet['!ref'] || 'A1:I1');
+      for (let col = range.s.c; col <= range.e.c; col++) {
+        const cellAddress = XLSX.utils.encode_cell({ r: 0, c: col });
+        if (ganttSheet[cellAddress]) {
+          ganttSheet[cellAddress].s = headerStyle;
+        }
+      }
+
+      // Apply project and task styles
+      const dataRange = XLSX.utils.decode_range(ganttSheet['!ref'] || 'A1:I1');
+      let projectIdx = 0;
+      for (let row = 1; row <= dataRange.e.r; row++) {
+        const typeCell = ganttSheet[XLSX.utils.encode_cell({ r: row, c: 2 })];
+        const isProjectRow = typeCell?.v === 'PROJECT';
+
+        if (isProjectRow && projectIdx < visibleProjects.length) {
+          const project = visibleProjects[projectIdx];
+          const projectColor = projectColorMap[project.id]?.replace('#', '') || '3B82F6';
+          const style = {
+            font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 11 },
+            fill: { fgColor: { rgb: projectColor } },
+            alignment: { horizontal: 'left', vertical: 'center' }
+          };
+
+          for (let col = range.s.c; col <= range.e.c; col++) {
+            const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+            if (ganttSheet[cellAddress]) {
+              ganttSheet[cellAddress].s = style;
+            }
+          }
+          projectIdx++;
+        } else {
+          // Apply status-based coloring to task/subtask rows
+          const statusCell = ganttSheet[XLSX.utils.encode_cell({ r: row, c: 6 })];
+          const statusValue = String(statusCell?.v || '').toLowerCase();
+          const statusKey = Object.keys(STATUS_LABEL).find(k =>
+            STATUS_LABEL[k].toLowerCase() === statusValue || k === statusValue
+          );
+
+          for (let col = range.s.c; col <= range.e.c; col++) {
+            const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+            if (ganttSheet[cellAddress]) {
+              ganttSheet[cellAddress].s = {
+                ...cellStyle,
+                ...(statusKey ? statusStyles[statusKey] : {})
+              };
+            }
+          }
+        }
+      }
 
       // Sheet 2 — All Tasks
       const allData: (string | number)[][] = [
         ['Project', 'Title', 'Type', 'Parent Task', 'Description', 'Status', 'Assignee',
-         'Planned Start', 'Planned End', 'Actual Start', 'Actual End', 'Est. Hours'],
+         'Planned Start', 'Planned End', 'Actual Start', 'Actual End', 'Est. Hours', 'Progress'],
       ];
+      let taskNum = 0;
       visibleProjects.forEach(project => {
         mainTasks.filter(t => t.project_id === project.id).forEach(task => {
-          allData.push([projectNameMap[task.project_id] ?? '', task.title, 'Task', '',
+          taskNum++;
+          const subs = subtaskMap[task.id] ?? [];
+          const doneSubs = subs.filter(s => s.status === 'done').length;
+          const progress = subs.length > 0 ? `${doneSubs}/${subs.length}` : '';
+          allData.push([
+            projectNameMap[task.project_id] ?? '', task.title, 'Task', '',
             task.description ?? '', STATUS_LABEL[task.status] ?? task.status,
             task.assigned_to ? (profileMap[task.assigned_to] ?? task.assigned_to) : 'Unassigned',
             fmtForExcel(task.planned_start), fmtForExcel(task.planned_end),
-            fmtForExcel(task.actual_start), fmtForExcel(task.actual_end), task.estimated_hours ?? '']);
+            fmtForExcel(task.actual_start), fmtForExcel(task.actual_end),
+            task.estimated_hours ?? '', progress
+          ]);
           (subtaskMap[task.id] ?? []).forEach(sub => {
-            allData.push([projectNameMap[sub.project_id] ?? '', sub.title, 'Subtask', task.title,
+            allData.push([
+              projectNameMap[sub.project_id] ?? '', sub.title, 'Subtask', task.title,
               sub.description ?? '', STATUS_LABEL[sub.status] ?? sub.status,
               sub.assigned_to ? (profileMap[sub.assigned_to] ?? sub.assigned_to) : 'Unassigned',
               fmtForExcel(sub.planned_start), fmtForExcel(sub.planned_end),
-              fmtForExcel(sub.actual_start), fmtForExcel(sub.actual_end), sub.estimated_hours ?? '']);
+              fmtForExcel(sub.actual_start), fmtForExcel(sub.actual_end),
+              sub.estimated_hours ?? '', ''
+            ]);
           });
         });
       });
       const allSheet = XLSX.utils.aoa_to_sheet(allData);
       allSheet['!cols'] = [
         { wch: 22 }, { wch: 38 }, { wch: 10 }, { wch: 30 }, { wch: 40 },
-        { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
+        { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 10 },
       ];
 
+      // Apply styles to All Tasks sheet
+      const allRange = XLSX.utils.decode_range(allSheet['!ref'] || 'A1:M1');
+      for (let col = allRange.s.c; col <= allRange.e.c; col++) {
+        const cellAddress = XLSX.utils.encode_cell({ r: 0, c: col });
+        if (allSheet[cellAddress]) {
+          allSheet[cellAddress].s = headerStyle;
+        }
+      }
+
+      // Apply status-based formatting to All Tasks sheet
+      for (let row = 1; row <= allRange.e.r; row++) {
+        const statusCell = allSheet[XLSX.utils.encode_cell({ r: row, c: 5 })];
+        const statusValue = String(statusCell?.v || '').toLowerCase();
+        const statusKey = Object.keys(STATUS_LABEL).find(k =>
+          STATUS_LABEL[k].toLowerCase() === statusValue || k === statusValue
+        );
+
+        for (let col = allRange.s.c; col <= allRange.e.c; col++) {
+          const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+          if (allSheet[cellAddress]) {
+            allSheet[cellAddress].s = {
+              ...cellStyle,
+              ...(statusKey ? statusStyles[statusKey] : {})
+            };
+          }
+        }
+      }
+
+      // Sheet 3 — Summary Dashboard
+      const summaryData: (string | number)[][] = [
+        ['PROJECT GANTT SUMMARY REPORT'],
+        [''],
+        ['Report Date:', new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })],
+        [''],
+        ['PROJECTS', '', ''],
+        ['Project Name', 'Total Tasks', 'Completed'],
+      ];
+
+      visibleProjects.forEach(project => {
+        const projTasks = mainTasks.filter(t => t.project_id === project.id);
+        const doneCount = projTasks.filter(t => t.status === 'done').length;
+        const allProjTasks = tasks.filter(t => t.project_id === project.id);
+        const totalIncludingSubtasks = allProjTasks.length;
+        summaryData.push([project.name, projTasks.length, doneCount]);
+      });
+
+      const totalTasks = tasks.length;
+      const doneTasks = tasks.filter(t => t.status === 'done').length;
+      const doingTasks = tasks.filter(t => t.status === 'doing').length;
+      const todoTasks = tasks.filter(t => t.status === 'todo').length;
+      const holdTasks = tasks.filter(t => t.status === 'hold').length;
+      const completionRate = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+
+      summaryData.push(['']);
+      summaryData.push(['OVERALL STATISTICS']);
+      summaryData.push(['Total Tasks', totalTasks]);
+      summaryData.push(['Completed', doneTasks]);
+      summaryData.push(['In Progress', doingTasks]);
+      summaryData.push(['To Do', todoTasks]);
+      summaryData.push(['On Hold', holdTasks]);
+      summaryData.push(['Completion Rate', `${completionRate}%`]);
+
+      const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+      summarySheet['!cols'] = [
+        { wch: 18 }, { wch: 14 }, { wch: 14 }
+      ];
+
+      // Style summary sheet
+      const summaryRange = XLSX.utils.decode_range(summarySheet['!ref'] || 'A1:C1');
+      const titleCell = summarySheet['A1'];
+      if (titleCell) {
+        titleCell.s = {
+          font: { bold: true, sz: 16, color: { rgb: '1E3A5F' } },
+          alignment: { horizontal: 'center' }
+        };
+      }
+
+      const sectionHeaders = [5, 11];
+      sectionHeaders.forEach(row => {
+        const cell = summarySheet[XLSX.utils.encode_cell({ r: row, c: 0 })];
+        if (cell) {
+          cell.s = {
+            font: { bold: true, color: { rgb: 'FFFFFF' } },
+            fill: { fgColor: { rgb: '3B82F6' } }
+          };
+        }
+      });
+
+      // Style the header row
+      for (let col = 0; col <= 2; col++) {
+        const cell = summarySheet[XLSX.utils.encode_cell({ r: 5, c: col })];
+        if (cell) {
+          cell.s = {
+            font: { bold: true },
+            fill: { fgColor: { rgb: 'E5E7EB' } },
+            border: {
+              top: { style: 'thin' },
+              bottom: { style: 'thin' },
+              left: { style: 'thin' },
+              right: { style: 'thin' }
+            }
+          };
+        }
+      }
+
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ganttSheet, 'Gantt');
+      XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
+      XLSX.utils.book_append_sheet(wb, ganttSheet, 'Gantt Chart');
       XLSX.utils.book_append_sheet(wb, allSheet, 'All Tasks');
+
       const slug = filterProjectId
         ? (projects.find(p => p.id === filterProjectId)?.name ?? 'project').replace(/\s+/g, '_')
         : 'all_projects';

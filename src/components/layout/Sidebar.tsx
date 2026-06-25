@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   LayoutDashboard, FolderOpen, CheckSquare, Settings,
-  ChevronDown, Plus, LogOut, Users, Trash2, MoreHorizontal, Building2,
+  ChevronDown, Plus, LogOut, Users, Trash2, MoreHorizontal, Building2, BarChart2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { Department, Project } from '../../types';
@@ -81,6 +81,7 @@ export default function Sidebar({
     ...((profile?.role === 'admin' || profile?.role === 'manager')
       ? [{ id: 'departments', label: 'Departments', icon: Building2 }]
       : []),
+    ...(profile?.role === 'admin' ? [{ id: 'reports', label: 'Reports', icon: BarChart2 }] : []),
     ...(profile?.role === 'admin' ? [{ id: 'user-management', label: 'User Management', icon: Users }] : []),
   ];
 

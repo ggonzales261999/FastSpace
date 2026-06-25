@@ -1,5 +1,6 @@
 export type UserRole = 'admin' | 'manager' | 'user';
 export type TaskStatus = 'todo' | 'doing' | 'done' | 'hold';
+export type TaskPriority = 'critical' | 'high' | 'medium' | 'low';
 export type ProjectMemberRole = 'owner' | 'member';
 
 export interface Department {
@@ -69,6 +70,7 @@ export interface Task {
   title: string;
   description?: string | null;
   status: TaskStatus;
+  priority: TaskPriority;
   planned_start?: string | null;
   planned_end?: string | null;
   actual_start?: string | null;
@@ -76,6 +78,7 @@ export interface Task {
   estimated_hours?: number | null;
   assigned_to?: string | null;
   created_by: string;
+  updated_by?: string | null;
   position: number;
   is_deleted: boolean;
   is_active: boolean;
@@ -84,6 +87,7 @@ export interface Task {
   subtasks?: Task[];
   assignee?: Profile | null;
   creator?: Profile | null;
+  updater?: Profile | null;
 }
 
 export interface TaskMessage {

@@ -22,12 +22,19 @@ export default function Dashboard({ onNavigate }: { onNavigate: (page: string, i
     queryKey: [...queryKeys.dashboard, profile?.id ?? 'anon', profile?.department_id ?? 'none', profile?.role ?? 'unknown'],
     enabled: !!profile,
     queryFn: async () => {
-      const { data } = await supabase
-        .from('projects')
-        .select('*')
-        .eq('is_deleted', false)
-        .eq('status', true);
-      return filterVisibleProjects(profile, (data ?? []) as Project[]);
+      const [{ data: projects }, { data: memberRows }] = await Promise.all([
+        supabase
+          .from('projects')
+          .select('*')
+          .eq('is_deleted', false)
+          .eq('status', true),
+        supabase
+          .from('project_members')
+          .select('project_id')
+          .eq('user_id', profile!.id),
+      ]);
+      const memberProjectIds = new Set((memberRows ?? []).map(row => row.project_id));
+      return filterVisibleProjects(profile, (projects ?? []) as Project[], memberProjectIds);
     },
   });
 
@@ -35,12 +42,16 @@ export default function Dashboard({ onNavigate }: { onNavigate: (page: string, i
     queryKey: [...queryKeys.dashboard, 'tasks', profile?.id ?? 'anon', profile?.department_id ?? 'none', profile?.role ?? 'unknown'],
     enabled: !!profile,
     queryFn: async () => {
-      const [{ data: projects }, { data: tasks }] = await Promise.all([
+      const [{ data: projects }, { data: memberRows }, { data: tasks }] = await Promise.all([
         supabase
           .from('projects')
           .select('*')
           .eq('is_deleted', false)
           .eq('status', true),
+        supabase
+          .from('project_members')
+          .select('project_id')
+          .eq('user_id', profile!.id),
         supabase
           .from('tasks')
           .select('*, project:projects(id,name,color)')
@@ -48,7 +59,8 @@ export default function Dashboard({ onNavigate }: { onNavigate: (page: string, i
           .eq('is_active', true)
           .order('created_at', { ascending: false }),
       ]);
-      const visibleProjects = filterVisibleProjects(profile, (projects ?? []) as Project[]);
+      const memberProjectIds = new Set((memberRows ?? []).map(row => row.project_id));
+      const visibleProjects = filterVisibleProjects(profile, (projects ?? []) as Project[], memberProjectIds);
       const visibleProjectIds = new Set(visibleProjects.map(project => project.id));
       return ((tasks ?? []) as (Task & { project?: Project })[]).filter(task => visibleProjectIds.has(task.project_id));
     },
